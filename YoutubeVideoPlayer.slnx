@@ -1,3 +1,12 @@
 <Solution>
-  <Project Path="YoutubeVideoPlayer/YoutubeVideoPlayer.csproj" />
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Projektmappenelemente/">
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="YoutubeVideoPlayer/YoutubeVideoPlayer.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
 </Solution>
