@@ -73,14 +73,14 @@ namespace YoutubeVideoPlayer
             _titleLabel = new Label
             {
                 AutoSize = false,
-                Height = 48,
+                Height = 25,
                 Width = 600,
                 BackColor = Color.FromArgb(200, 0, 0, 0),
                 ForeColor = Color.White,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8),
+                Padding = new Padding(0),
                 Visible = false,
-                Font = new Font(FontFamily.GenericSansSerif, 12, FontStyle.Bold),
+                Font = new Font(FontFamily.GenericSansSerif, 10, FontStyle.Bold),
                 Anchor = AnchorStyles.Left | AnchorStyles.Bottom,
                 AutoEllipsis = true
             };
