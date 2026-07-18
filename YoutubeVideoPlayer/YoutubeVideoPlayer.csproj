@@ -7,8 +7,8 @@
 	<AssemblyName>YouTubeVideoPlayer</AssemblyName>
 	<RootNamespace>YouTubeVideoPlayer</RootNamespace>
 	<Platforms>AnyCPU;x64</Platforms>
-	<AssemblyVersion>1.0.2</AssemblyVersion>
-	<FileVersion>1.0.2</FileVersion>
+	<AssemblyVersion>1.0.3</AssemblyVersion>
+	<FileVersion>1.0.3</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

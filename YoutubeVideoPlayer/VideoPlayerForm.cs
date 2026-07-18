@@ -674,11 +674,16 @@ namespace YoutubeVideoPlayer
         {
             _previousBorderStyle = this.FormBorderStyle;
             _previousWindowState = this.WindowState;
+            _previousBounds = this.Bounds;
+
+            var videobounds = _videoView.RectangleToScreen(_videoView.ClientRectangle);
 
             this.WindowState = FormWindowState.Normal;
             this.FormBorderStyle = FormBorderStyle.None;
+            this.Bounds = videobounds;
 
             _controlPanel.Visible = false;
+            _videoView.Dock = DockStyle.Fill;
             _isBorderless = true;
         }
 
@@ -686,7 +691,9 @@ namespace YoutubeVideoPlayer
         {
             this.FormBorderStyle = _previousBorderStyle;
             this.WindowState = _previousWindowState;
+            this.Bounds = _previousBounds;
 
+            _videoView.Dock = DockStyle.Fill;
             _controlPanel.Visible = true;
             _isBorderless = false;
         }
