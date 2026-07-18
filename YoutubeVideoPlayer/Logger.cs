@@ -7,9 +7,37 @@ namespace YouTubeVideoPlayer
     {
         private static readonly object LockObject = new object();
         private static readonly string LogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "errorlog.txt");
+        private const long MaxLogFileSizeBytes = 5 * 1024 * 1024; // 5 MB
+
+        public static void Clear()
+        {
+            lock (LockObject)
+            {
+                if (File.Exists(LogFilePath))
+                {
+                    File.WriteAllText(LogFilePath, string.Empty);
+                }
+            }
+        }
+
+        private static bool IsLogFileTooLarge()
+        {
+            if (!File.Exists(LogFilePath))
+            {
+                return false;
+            }
+
+            FileInfo fileInfo = new FileInfo(LogFilePath);
+            return fileInfo.Length >= MaxLogFileSizeBytes;
+        }
 
         public static void Log(string message, Exception exception)
         {
+            if (IsLogFileTooLarge())
+            {
+                return;
+            }
+
             if (exception == null)
             {
                 return;
@@ -37,6 +65,11 @@ namespace YouTubeVideoPlayer
 
         public static void Log(string message)
         {
+            if (IsLogFileTooLarge())
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(message))
             {
                 return;

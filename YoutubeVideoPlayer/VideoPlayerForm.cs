@@ -43,6 +43,7 @@ namespace YoutubeVideoPlayer
         private Timer _bufferingAnimationTimer;
         private Timer failSafeTimer;
         private bool failSafeTriggered = false;
+        private long _failSafePlaybackTime;
         private int _bufferingAnimationFrame = 0;
         private bool _isCurrentlyBuffering = false;
         private const int BUFFERING_TIMEOUT_MS = 30000; // 30 seconds
@@ -71,6 +72,7 @@ namespace YoutubeVideoPlayer
             InitializeTimers();
             InitializeButtons();
 
+            Logger.Clear();
             Load += Form1_Load;
             FormClosing += Form1_FormClosing;
         }
@@ -245,7 +247,10 @@ namespace YoutubeVideoPlayer
             failSafeTimer.Tick += async (_, __) =>
             {
                 Debug.WriteLine("Current VLC State: " + _mediaPlayer.State);
-                if (_mediaPlayer.State != VLCState.Playing)
+
+                var currentPlaybackTime = _mediaPlayer.Time;
+
+                if (_mediaPlayer.State != VLCState.Playing || currentPlaybackTime == _failSafePlaybackTime)
                 {
                     if (!failSafeTriggered)
                     {
@@ -253,14 +258,19 @@ namespace YoutubeVideoPlayer
                         return;
                     }
                     Debug.WriteLine("Failstate triggered VLC State: " + _mediaPlayer.State);
-                    Logger.Log("Failstate triggered VLC State: " + _mediaPlayer.State);
+                    if (currentPlaybackTime == _failSafePlaybackTime)
+                        Logger.Log("Media player state is playing, but video is frozen. Disconnect possible.");
+                    else
+                        Logger.Log("Failstate triggered VLC State: " + _mediaPlayer.State);
 
                     _bufferingTimeoutTimer.Stop();
                     _bufferingAnimationTimer.Stop();
                     _bufferingLabel.Visible = false;
                     BeginInvoke(async () => await PlayNextAsync());
-                    failSafeTriggered = false;   
                 }
+
+                _failSafePlaybackTime = currentPlaybackTime;
+
                 failSafeTriggered = false;
             };
             failSafeTimer.Start();
