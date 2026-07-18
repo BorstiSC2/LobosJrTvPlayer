@@ -10,6 +10,8 @@ using LibVLCSharp.WinForms;
 using YoutubeExplode;
 using YoutubeExplode.Videos.Streams;
 using Newtonsoft.Json;
+using System.Diagnostics;
+using YouTubeVideoPlayer;
 
 namespace YoutubeVideoPlayer
 {
@@ -19,6 +21,7 @@ namespace YoutubeVideoPlayer
         private Button _nextButton;
         private Panel _controlPanel;
         private Button _fullscreenButton;
+        private Button _borderlessButton;
         private Label _titleLabel;
         private Label _volumeLabel;
         private Label _bufferingLabel;
@@ -35,12 +38,18 @@ namespace YoutubeVideoPlayer
         private List<string> _videoIds;
         private Random _rnd = new Random();
         private YoutubeClient _yt;
-        private System.Windows.Forms.Timer _volumeDisplayTimer;
-        private System.Windows.Forms.Timer _bufferingTimeoutTimer;
-        private System.Windows.Forms.Timer _bufferingAnimationTimer;
+        private Timer _volumeDisplayTimer;
+        private Timer _bufferingTimeoutTimer;
+        private Timer _bufferingAnimationTimer;
+        private Timer failSafeTimer;
+        private bool failSafeTriggered = false;
         private int _bufferingAnimationFrame = 0;
         private bool _isCurrentlyBuffering = false;
         private const int BUFFERING_TIMEOUT_MS = 30000; // 30 seconds
+        private FormBorderStyle _previousBorderStyle;
+        private FormWindowState _previousWindowState;
+        private Rectangle _previousBounds;
+        private bool _isBorderless;
 
         public VideoPlayerForm()
         {
@@ -204,7 +213,7 @@ namespace YoutubeVideoPlayer
         private void InitializeTimers()
         {
             // Timer to hide volume label after a few seconds
-            _volumeDisplayTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            _volumeDisplayTimer = new Timer { Interval = 2000 };
             _volumeDisplayTimer.Tick += (_, __) =>
             {
                 _volumeLabel.Visible = false;
@@ -212,7 +221,7 @@ namespace YoutubeVideoPlayer
             };
 
             // Buffering timeout timer (30 seconds max buffering before skipping to next video)
-            _bufferingTimeoutTimer = new System.Windows.Forms.Timer { Interval = BUFFERING_TIMEOUT_MS };
+            _bufferingTimeoutTimer = new Timer { Interval = BUFFERING_TIMEOUT_MS };
             _bufferingTimeoutTimer.Tick += async (_, __) =>
             {
                 _bufferingTimeoutTimer.Stop();
@@ -221,7 +230,7 @@ namespace YoutubeVideoPlayer
             };
 
             // Buffering animation timer (spinner animation, 500ms per frame)
-            _bufferingAnimationTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _bufferingAnimationTimer = new Timer { Interval = 500 };
             _bufferingAnimationTimer.Tick += (_, __) =>
             {
                 if (_isCurrentlyBuffering && _bufferingLabel.Visible)
@@ -231,6 +240,30 @@ namespace YoutubeVideoPlayer
                     _bufferingAnimationFrame++;
                 }
             };
+
+            failSafeTimer = new Timer { Interval = 20000 }; // 20 seconds
+            failSafeTimer.Tick += async (_, __) =>
+            {
+                Debug.WriteLine("Current VLC State: " + _mediaPlayer.State);
+                if (_mediaPlayer.State != VLCState.Playing)
+                {
+                    if (!failSafeTriggered)
+                    {
+                        failSafeTriggered = true;
+                        return;
+                    }
+                    Debug.WriteLine("Failstate triggered VLC State: " + _mediaPlayer.State);
+                    Logger.Log("Failstate triggered VLC State: " + _mediaPlayer.State);
+
+                    _bufferingTimeoutTimer.Stop();
+                    _bufferingAnimationTimer.Stop();
+                    _bufferingLabel.Visible = false;
+                    BeginInvoke(async () => await PlayNextAsync());
+                    failSafeTriggered = false;   
+                }
+                failSafeTriggered = false;
+            };
+            failSafeTimer.Start();
         }
 
         #endregion
@@ -260,7 +293,12 @@ namespace YoutubeVideoPlayer
 
             _fullscreenButton = new Button { Text = "Fullscreen", Dock = DockStyle.Right, Width = 100, Height = 40 };
             _fullscreenButton.Click += (_, __) => ToggleFullscreen();
+      
             _controlPanel.Controls.Add(_fullscreenButton);
+
+            _borderlessButton = new Button { Text = "Borderless", Dock = DockStyle.Right, Width = 100, Height = 40 };
+            _borderlessButton.Click += (_, __) => ToggleBorderless();
+            _controlPanel.Controls.Add(_borderlessButton);
 
             _videoView.DoubleClick += (_, __) => ToggleFullscreen();
 
@@ -463,7 +501,7 @@ namespace YoutubeVideoPlayer
         {
             if (_videoIds == null || _videoIds.Count == 0)
             {
-                MessageBox.Show("Keine Videos in videos.json gefunden.");
+                MessageBox.Show("No videos found in JSON");
                 return;
             }
 
@@ -478,15 +516,9 @@ namespace YoutubeVideoPlayer
                     // success
                     return;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // remove problematic id and continue with next
-                    try
-                    {
-                        _videoIds.RemoveAt(index);
-                    }
-                    catch { }
-
+                    Logger.Log("Exception occured in PlayNextAsync.", ex);
                     // continue loop without showing a message box
                 }
             }
@@ -497,6 +529,7 @@ namespace YoutubeVideoPlayer
 
         private async Task PlayVideoByIdAsync(string idOrUrl)
         {
+            Logger.Log($"Queuing new video with Id: {idOrUrl}");
             // Accept either raw ID or full URL
             var url = idOrUrl;
             if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
@@ -532,8 +565,9 @@ namespace YoutubeVideoPlayer
                 videoStream = manifest.GetVideoOnlyStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
                 audioStream = manifest.GetAudioOnlyStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.Log("Exception occured trying to assign video and audio streams.", ex);
                 // If API throws for any reason, leave streams null and fallback to muxed below
                 videoStream = null;
                 audioStream = null;
@@ -554,13 +588,14 @@ namespace YoutubeVideoPlayer
                 {
                     var muxed = manifest.GetMuxedStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
                     if (muxed == null)
-                        throw new Exception("Kein abspielbarer (muxed) Stream gefunden.");
+                        throw new Exception("No muxed stream found");
 
                     videoUrl = muxed.Url;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    throw new Exception("Kein abspielbarer Stream gefunden.");
+                    Logger.Log("Exception occured trying to assign a muxed stream.", ex);
+                    throw;
                 }
             }
 
@@ -572,7 +607,11 @@ namespace YoutubeVideoPlayer
 
                 _currentMedia?.Dispose();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Logger.Log("Exception occured trying to dispose of the previous media.", ex);
+                throw;
+            }
 
             _currentMedia = new Media(_libVLC, videoUrl, FromType.FromLocation);
 
@@ -619,6 +658,38 @@ namespace YoutubeVideoPlayer
             UpdateTitleLabelPosition();
         }
 
+        private void ToggleBorderless()
+        {
+            if (!_isBorderless)
+            {
+                EnterBorderless();
+            }
+            else
+            {
+                ExitBorderless();
+            }
+        }
+
+        private void EnterBorderless()
+        {
+            _previousBorderStyle = this.FormBorderStyle;
+            _previousWindowState = this.WindowState;
+
+            this.WindowState = FormWindowState.Normal;
+            this.FormBorderStyle = FormBorderStyle.None;
+
+            _controlPanel.Visible = false;
+            _isBorderless = true;
+        }
+
+        private void ExitBorderless()
+        {
+            this.FormBorderStyle = _previousBorderStyle;
+            this.WindowState = _previousWindowState;
+
+            _controlPanel.Visible = true;
+            _isBorderless = false;
+        }
         #endregion
 
         #region Keyboard Input
@@ -629,6 +700,8 @@ namespace YoutubeVideoPlayer
                 ToggleFullscreen();
             else if (e.KeyCode == Keys.Escape && _isFullscreen)
                 ToggleFullscreen();
+            else if(e.KeyCode == Keys.Escape && _isBorderless)
+                ToggleBorderless();
             else if (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)
                 AdjustVolume(5); // Increase volume by 5%
             else if (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)
