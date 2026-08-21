@@ -12,6 +12,7 @@ using YoutubeExplode.Videos.Streams;
 using Newtonsoft.Json;
 using System.Diagnostics;
 using YouTubeVideoPlayer;
+using System.Threading;
 
 namespace YoutubeVideoPlayer
 {
@@ -38,10 +39,10 @@ namespace YoutubeVideoPlayer
         private List<string> _videoIds;
         private Random _rnd = new Random();
         private YoutubeClient _yt;
-        private Timer _volumeDisplayTimer;
-        private Timer _bufferingTimeoutTimer;
-        private Timer _bufferingAnimationTimer;
-        private Timer failSafeTimer;
+        private System.Windows.Forms.Timer _volumeDisplayTimer;
+        private System.Windows.Forms.Timer _bufferingTimeoutTimer;
+        private System.Windows.Forms.Timer _bufferingAnimationTimer;
+        private System.Windows.Forms.Timer failSafeTimer;
         private bool failSafeTriggered = false;
         private long _failSafePlaybackTime;
         private int _bufferingAnimationFrame = 0;
@@ -50,7 +51,9 @@ namespace YoutubeVideoPlayer
         private FormBorderStyle _previousBorderStyle;
         private FormWindowState _previousWindowState;
         private Rectangle _previousBounds;
-        private bool _isBorderless;
+        private bool _isBorderless; 
+        private CancellationTokenSource? _playNextCancellationTokenSource;
+        private Task? _playNextTask;
 
         public VideoPlayerForm()
         {
@@ -215,7 +218,7 @@ namespace YoutubeVideoPlayer
         private void InitializeTimers()
         {
             // Timer to hide volume label after a few seconds
-            _volumeDisplayTimer = new Timer { Interval = 2000 };
+            _volumeDisplayTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             _volumeDisplayTimer.Tick += (_, __) =>
             {
                 _volumeLabel.Visible = false;
@@ -223,7 +226,7 @@ namespace YoutubeVideoPlayer
             };
 
             // Buffering timeout timer (30 seconds max buffering before skipping to next video)
-            _bufferingTimeoutTimer = new Timer { Interval = BUFFERING_TIMEOUT_MS };
+            _bufferingTimeoutTimer = new System.Windows.Forms.Timer { Interval = BUFFERING_TIMEOUT_MS };
             _bufferingTimeoutTimer.Tick += async (_, __) =>
             {
                 _bufferingTimeoutTimer.Stop();
@@ -232,7 +235,7 @@ namespace YoutubeVideoPlayer
             };
 
             // Buffering animation timer (spinner animation, 500ms per frame)
-            _bufferingAnimationTimer = new Timer { Interval = 500 };
+            _bufferingAnimationTimer = new System.Windows.Forms.Timer { Interval = 500 };
             _bufferingAnimationTimer.Tick += (_, __) =>
             {
                 if (_isCurrentlyBuffering && _bufferingLabel.Visible)
@@ -243,7 +246,7 @@ namespace YoutubeVideoPlayer
                 }
             };
 
-            failSafeTimer = new Timer { Interval = 20000 }; // 20 seconds
+            failSafeTimer = new System.Windows.Forms.Timer { Interval = 20000 }; // 20 seconds
             failSafeTimer.Tick += async (_, __) =>
             {
                 Debug.WriteLine("Current VLC State: " + _mediaPlayer.State);
@@ -509,35 +512,119 @@ namespace YoutubeVideoPlayer
 
         private async Task PlayNextAsync()
         {
+            CancellationTokenSource? previousCancellationTokenSource =
+                _playNextCancellationTokenSource;
+
+            Task? previousTask = _playNextTask;
+
+            if (previousCancellationTokenSource != null)
+            {
+                Logger.Log("Cancelling previous PlayNextAsync operation...");
+
+                await previousCancellationTokenSource.CancelAsync();
+
+                if (previousTask != null)
+                {
+                    try
+                    {
+                        await previousTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected when the previous operation was cancelled.
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log("Previous PlayNextAsync operation failed.", ex);
+                    }
+                }
+
+                previousCancellationTokenSource.Dispose();
+
+                // Only clear the fields if they still refer to the operation
+                // that we originally captured.
+                if (ReferenceEquals(
+                    _playNextCancellationTokenSource,
+                    previousCancellationTokenSource))
+                {
+                    _playNextCancellationTokenSource = null;
+                }
+
+                if (ReferenceEquals(_playNextTask, previousTask))
+                {
+                    _playNextTask = null;
+                }
+            }
+
+            var cancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = cancellationTokenSource.Token;
+
+            _playNextCancellationTokenSource = cancellationTokenSource;
+
+            var currentTask = PlayNextInternalAsync(cancellationToken);
+            _playNextTask = currentTask;
+
+            try
+            {
+                await currentTask;
+            }
+            finally
+            {
+                // Only clean up if this is still the current operation.
+                if (ReferenceEquals(_playNextTask, currentTask))
+                {
+                    _playNextTask = null;
+                }
+
+                if (ReferenceEquals(
+                    _playNextCancellationTokenSource,
+                    cancellationTokenSource))
+                {
+                    _playNextCancellationTokenSource = null;
+                    cancellationTokenSource.Dispose();
+                }
+            }
+        }
+
+        private async Task PlayNextInternalAsync(CancellationToken cancellationToken)
+        {
+            Logger.Log("Attempting to play next video...");
+
             if (_videoIds == null || _videoIds.Count == 0)
             {
                 MessageBox.Show("No videos found in JSON");
                 return;
             }
 
-            // Try items until one plays successfully. On failure remove the id and try the next without showing a message box.
-            while (_videoIds != null && _videoIds.Count > 0)
+            while (_videoIds.Count > 0)
             {
-                var index = _rnd.Next(_videoIds.Count);
-                var id = _videoIds[index];
                 try
                 {
-                    await PlayVideoByIdAsync(id);
-                    // success
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var index = _rnd.Next(_videoIds.Count);
+                    var id = _videoIds[index];
+                    await Task.Delay(1000, cancellationToken);
+
+                    await PlayVideoByIdAsync(id, cancellationToken);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.Log("PlayNextAsync operation was canceled.");
                     return;
                 }
                 catch (Exception ex)
                 {
-                    Logger.Log("Exception occured in PlayNextAsync.", ex);
-                    // continue loop without showing a message box
+                    Logger.Log("Exception occurred in PlayNextAsync.", ex);
                 }
             }
-
-            // If we exit loop, no playable videos remain; quietly return (no message box per request)
-            return;
         }
 
-        private async Task PlayVideoByIdAsync(string idOrUrl)
+        private async Task PlayVideoByIdAsync(string idOrUrl, CancellationToken cancellationToken)
         {
             Logger.Log($"Queuing new video with Id: {idOrUrl}");
             // Accept either raw ID or full URL
@@ -555,7 +642,12 @@ namespace YoutubeVideoPlayer
 
             // Get video metadata (to show title) and resolve stream manifest
             var videoMeta = await _yt.Videos.GetAsync(url);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
             var manifest = await _yt.Videos.Streams.GetManifestAsync(url);
+            cancellationToken.ThrowIfCancellationRequested();
+
 
             // Show title overlay (replace loading)
             if (_titleLabel != null)
@@ -573,7 +665,11 @@ namespace YoutubeVideoPlayer
             try
             {
                 videoStream = manifest.GetVideoOnlyStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
+                cancellationToken.ThrowIfCancellationRequested();
+
                 audioStream = manifest.GetAudioOnlyStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
+                cancellationToken.ThrowIfCancellationRequested();
+
             }
             catch (Exception ex)
             {
@@ -624,6 +720,8 @@ namespace YoutubeVideoPlayer
             }
 
             _currentMedia = new Media(_libVLC, videoUrl, FromType.FromLocation);
+            cancellationToken.ThrowIfCancellationRequested();
+
 
             // If there is a separate audio stream, add it as an input-slave so libVLC plays video + audio together
             if (!string.IsNullOrEmpty(audioUrl))
@@ -633,6 +731,8 @@ namespace YoutubeVideoPlayer
             }
 
             _mediaPlayer.Play(_currentMedia);
+            cancellationToken.ThrowIfCancellationRequested();
+
         }
 
         #endregion
