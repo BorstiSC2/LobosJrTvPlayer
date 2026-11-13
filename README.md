@@ -81,7 +81,7 @@ Every playlist has its own order, saved as `shuffle` in `playlists.json` (playli
 - **Random order** (default): the next video is picked at random, never the one that just ended.
 - **In order**: the videos play one after the other as in the YouTube playlist, and start over after the last one. Playback starts with the first video, **Next** and `!skip` only go to the next video, and so does the end of a video.
 
-Change it in the **Playlists** dialog (the **Order** column shows the current setting; the **Random order** checkbox changes it for the selected playlist) or with the chat commands `!shufflestatus` / `!toggleshuffle`. **All playlists** combined always plays in random order, because there is no common order.
+Change it in the **Playlists** dialog (the **Random order** column of the list has a checkbox for each playlist: checked = random, unchecked = in order) or with the chat commands `!shufflestatus` / `!toggleshuffle`. **All playlists** combined always plays in random order, because there is no common order.
 
 ### Loading behaviour
 

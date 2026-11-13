@@ -25,8 +25,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly Button _removeButton;
         private readonly Button _updateButton;
         private readonly Button _updateAllButton;
-        private readonly CheckBox _shuffleCheckBox;
-        private bool _updatingShuffleCheckBox;
+        private bool _refreshing;
         private bool _busy;
 
         public PlaylistDialog(PlaylistManager playlists)
@@ -47,13 +46,16 @@ namespace YouTubeVideoPlayer.UI
                 View = View.Details,
                 FullRowSelect = true,
                 MultiSelect = false,
-                HideSelection = false
+                HideSelection = false,
+                // The check box of each row (in the first column) is the playlist's "random order" setting:
+                // checked = random, unchecked = one video after the other in playlist order.
+                CheckBoxes = true
             };
-            _listView.Columns.Add("Playlist", 270);
+            _listView.Columns.Add("Random order", 100);
+            _listView.Columns.Add("Playlist", 240);
             _listView.Columns.Add("Videos", 70, HorizontalAlignment.Right);
-            _listView.Columns.Add("Order", 80);
             _listView.Columns.Add("Last updated", 130);
-            _listView.Columns.Add("Status", 220);
+            _listView.Columns.Add("Status", 200);
 
             _playButton = CreateButton("Play", PlaySelectedAsync);
             _addButton = CreateButton("Add...", AddAsync);
@@ -61,26 +63,6 @@ namespace YouTubeVideoPlayer.UI
             _removeButton = CreateButton("Remove", () => { RemoveSelected(); return Task.CompletedTask; });
             _updateButton = CreateButton("Update", UpdateSelectedAsync);
             _updateAllButton = CreateButton("Update all", UpdateAllAsync);
-            // Saved with the playlist; off = the videos play one after the other in playlist order.
-            _shuffleCheckBox = new CheckBox
-            {
-                Text = "Random order",
-                AutoSize = true,
-                Margin = new Padding(6, 10, 3, 10)
-            };
-            _shuffleCheckBox.CheckedChanged += (_, __) =>
-            {
-                if (_updatingShuffleCheckBox || SelectedPlaylistKey is not { } key)
-                    return;
-
-                var shuffle = _shuffleCheckBox.Checked;
-                RunAction(() =>
-                {
-                    _playlists.SetShuffle(key, shuffle);
-                    return Task.CompletedTask;
-                });
-            };
-
             var closeButton = NewButton("Close");
             closeButton.DialogResult = DialogResult.Cancel;
 
@@ -96,7 +78,7 @@ namespace YouTubeVideoPlayer.UI
             };
             buttonPanel.Controls.AddRange(new Control[]
             {
-                _playButton, _addButton, _renameButton, _removeButton, _updateButton, _updateAllButton, _shuffleCheckBox, closeButton
+                _playButton, _addButton, _renameButton, _removeButton, _updateButton, _updateAllButton, closeButton
             });
 
             _statusLabel = new Label
@@ -117,7 +99,13 @@ namespace YouTubeVideoPlayer.UI
             CancelButton = closeButton;
 
             _listView.SelectedIndexChanged += (_, __) => UpdateButtons();
-            _listView.DoubleClick += (_, __) => RunAction(PlaySelectedAsync);
+            _listView.ItemChecked += OnItemChecked;
+            _listView.MouseDoubleClick += (_, e) =>
+            {
+                // Two quick clicks on a check box must not also start the playlist.
+                if (_listView.HitTest(e.Location).Location != ListViewHitTestLocations.StateImage)
+                    RunAction(PlaySelectedAsync);
+            };
             KeyDown += OnKeyDown;
 
             // The ListView drops a selection made before its window exists, so select the active playlist again.
@@ -212,15 +200,32 @@ namespace YouTubeVideoPlayer.UI
 
         private void RefreshList()
         {
+            // Filling the list also sets the check boxes; that must not be taken for a click.
+            _refreshing = true;
+            try
+            {
+                FillList();
+            }
+            finally
+            {
+                _refreshing = false;
+            }
+
+            UpdateButtons();
+        }
+
+        private void FillList()
+        {
             var selectedTag = SelectedTag ?? _playlists.SelectedKey ?? AllPlaylistsTag;
 
             _listView.BeginUpdate();
             _listView.Items.Clear();
 
             var allLoaded = _playlists.Playlists.Count(p => p.State == PlaylistLoadState.Loaded);
-            var allItem = new ListViewItem(FormatTitle("All playlists", _playlists.SelectedKey == null)) { Tag = AllPlaylistsTag };
+            // All playlists together always play in random order, so this box is always checked.
+            var allItem = new ListViewItem(string.Empty) { Tag = AllPlaylistsTag, Checked = true };
+            allItem.SubItems.Add(FormatTitle("All playlists", _playlists.SelectedKey == null));
             allItem.SubItems.Add(_playlists.SelectedKey == null ? _playlists.PoolCount.ToString() : string.Empty);
-            allItem.SubItems.Add(FormatOrder(shuffle: true)); // all playlists together always play in random order
             allItem.SubItems.Add(string.Empty);
             allItem.SubItems.Add(_playlists.IsLoading ? $"{allLoaded}/{_playlists.Playlists.Count} loaded..." : string.Empty);
             _listView.Items.Add(allItem);
@@ -228,9 +233,9 @@ namespace YouTubeVideoPlayer.UI
             foreach (var playlist in _playlists.Playlists)
             {
                 var isActive = playlist.Key == _playlists.SelectedKey;
-                var item = new ListViewItem(FormatTitle(playlist.Title, isActive)) { Tag = playlist.Key };
+                var item = new ListViewItem(string.Empty) { Tag = playlist.Key, Checked = playlist.Shuffle };
+                item.SubItems.Add(FormatTitle(playlist.Title, isActive));
                 item.SubItems.Add(playlist.State == PlaylistLoadState.Loaded ? playlist.VideoIds.Count.ToString() : string.Empty);
-                item.SubItems.Add(FormatOrder(playlist.Shuffle));
                 item.SubItems.Add(playlist.FetchedAtUtc?.ToLocalTime().ToString("g") ?? string.Empty);
                 item.SubItems.Add(FormatState(playlist));
                 if (playlist.State == PlaylistLoadState.Failed)
@@ -249,12 +254,68 @@ namespace YouTubeVideoPlayer.UI
             }
 
             _listView.EndUpdate();
-            UpdateButtons();
+        }
+
+        /// <summary>A check box in the list was clicked: save the new order of that playlist.</summary>
+        private void OnItemChecked(object? sender, ItemCheckedEventArgs e)
+        {
+            if (_refreshing)
+                return;
+
+            var item = e.Item;
+            var tag = (string)item.Tag!;
+            var shuffle = item.Checked;
+
+            // The list also reports the items it inserts (e.g. when its window is created), not only clicks.
+            // Only a box that differs from the saved order is a change; "All playlists" must stay checked.
+            if (tag == AllPlaylistsTag)
+            {
+                if (shuffle)
+                    return;
+            }
+            else if (_playlists.Playlists.FirstOrDefault(p => p.Key == tag) is not { } playlist || playlist.Shuffle == shuffle)
+            {
+                return;
+            }
+
+            // The change is applied after this notification: saving refreshes (rebuilds) the list.
+            void Apply()
+            {
+                // While its window is created the list reports an item first as unchecked and then as
+                // checked; only a state that is still there after the notification is a click.
+                if (IsDisposed || item.Checked != shuffle)
+                    return;
+
+                // "All playlists" cannot be changed, and nothing may change while an action runs.
+                if (tag == AllPlaylistsTag || _busy)
+                {
+                    RefreshList();
+                    return;
+                }
+
+                RunAction(() =>
+                {
+                    try
+                    {
+                        _playlists.SetShuffle(tag, shuffle);
+                    }
+                    catch
+                    {
+                        RefreshList(); // show the value that is really saved
+                        throw;
+                    }
+
+                    return Task.CompletedTask;
+                });
+            }
+
+            if (IsHandleCreated)
+                BeginInvoke(Apply);
+            else
+                Apply();
         }
 
         private static string FormatTitle(string title, bool isActive) => isActive ? "▶ " + title : "    " + title;
-
-        private static string FormatOrder(bool shuffle) => shuffle ? "Random" : "In order";
 
         private static string FormatState(PlaylistInfo playlist) => playlist.State switch
         {
@@ -276,20 +337,6 @@ namespace YouTubeVideoPlayer.UI
             _removeButton.Enabled = !_busy && playlist != null;
             _updateButton.Enabled = !_busy && playlist != null && playlist.State != PlaylistLoadState.Loading;
             _updateAllButton.Enabled = !_busy && _playlists.Playlists.Count > 0;
-
-            // The box shows the order of the selected playlist. "All playlists" always plays in random
-            // order, which cannot be changed, so it is shown checked but disabled.
-            _updatingShuffleCheckBox = true;
-            try
-            {
-                _shuffleCheckBox.Checked = playlist?.Shuffle ?? tag != null;
-            }
-            finally
-            {
-                _updatingShuffleCheckBox = false;
-            }
-
-            _shuffleCheckBox.Enabled = !_busy && playlist != null;
         }
 
         private async void RunAction(Func<Task> action)

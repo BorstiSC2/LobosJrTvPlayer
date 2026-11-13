@@ -43,70 +43,111 @@ public class PlaylistDialogTests
         using var _ = setup;
         using var dialog = new PlaylistDialog(manager).ShowHidden(); // the selection needs a window handle
 
+        // Columns: random order (a check box, no text), playlist, videos, last updated, status.
         var rows = List(dialog).Items.Cast<ListViewItem>().Select(i => i.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(s => s.Text).ToArray()).ToList();
 
+        Assert.Equal(new[] { "Random order", "Playlist", "Videos", "Last updated", "Status" }, List(dialog).Columns.Cast<ColumnHeader>().Select(c => c.Text));
         Assert.Equal(4, rows.Count);
-        Assert.Equal(new[] { "    All playlists", "", "Random", "", "" }, rows[0]);
-        Assert.Equal("▶ Alpha", rows[1][0]);
-        Assert.Equal("2", rows[1][1]);
-        Assert.Equal("Random", rows[1][2]);
+        Assert.Equal(new[] { "", "    All playlists", "", "", "" }, rows[0]);
+        Assert.Equal("▶ Alpha", rows[1][1]);
+        Assert.Equal("2", rows[1][2]);
         Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToLocalTime().ToString("g"), rows[1][3]);
-        Assert.Equal("    Beta", rows[2][0]);
+        Assert.Equal("    Beta", rows[2][1]);
         Assert.Equal("Failed: no such playlist", rows[3][4]);
         Assert.Equal(Color.Firebrick, List(dialog).Items[3].ForeColor);
         Assert.True(List(dialog).Items[1].Selected); // the active playlist is preselected
     }, sta: true);
 
-    private static CheckBox RandomOrderBox(Form dialog) => dialog.All<CheckBox>().Single(c => c.Text == "Random order");
-
     [Fact]
-    public void TheOrderColumnAndCheckbox_ShowAndChangeTheOrderOfTheSelectedPlaylist() => UiContext.Run(async () =>
+    public void TheRandomOrderCheckBoxesAreInTheGrid_NotNextToTheButtons() => UiContext.Run(async () =>
     {
         var (setup, manager) = await LoadAsync(ThreePlaylists());
         using var _ = setup;
         using var dialog = new PlaylistDialog(manager).ShowHidden();
-        var box = RandomOrderBox(dialog);
 
-        // The active playlist (Alpha) is preselected and shuffled by default.
-        Assert.True(box.Enabled);
-        Assert.True(box.Checked);
-
-        box.Checked = false;
-        await Async.SettleAsync();
-
-        Assert.False(manager.Playlists[0].Shuffle);
-        Assert.False(setup.SavedLibrary().Playlists[0].Shuffle); // saved with the playlist
-        Assert.Equal("In order", List(dialog).Items[1].SubItems[2].Text);
-        Assert.Equal("Random", List(dialog).Items[2].SubItems[2].Text); // the others are not touched
-        Assert.True(List(dialog).Items[1].Selected);
-        Assert.False(box.Checked);
-
-        SelectRow(dialog, 2); // Beta is still shuffled
-        Assert.True(box.Checked);
-        SelectRow(dialog, 1);
-        Assert.False(box.Checked);
-
-        box.Checked = true;
-        await Async.SettleAsync();
-        Assert.True(manager.Playlists[0].Shuffle);
-        Assert.Equal("Random", List(dialog).Items[1].SubItems[2].Text);
+        Assert.True(List(dialog).CheckBoxes);
+        Assert.Empty(dialog.All<CheckBox>()); // no separate check box control any more
+        Assert.All(List(dialog).Items.Cast<ListViewItem>(), item => Assert.True(item.Checked)); // all random by default
     }, sta: true);
 
     [Fact]
-    public void TheCheckbox_IsCheckedButDisabledForAllPlaylists_AndDisabledWithoutSelection() => UiContext.Run(async () =>
+    public void ClickingACheckBoxInTheGrid_ChangesAndSavesTheOrderOfThatPlaylist() => UiContext.Run(async () =>
     {
         var (setup, manager) = await LoadAsync(ThreePlaylists());
         using var _ = setup;
         using var dialog = new PlaylistDialog(manager).ShowHidden();
-        var box = RandomOrderBox(dialog);
 
-        SelectRow(dialog, 0); // "All playlists" always plays in random order
-        Assert.True(box.Checked);
-        Assert.False(box.Enabled);
+        List(dialog).Items[2].Checked = false; // Beta
+        await Async.SettleAsync();
 
-        List(dialog).SelectedItems.Clear();
-        Assert.False(box.Checked);
-        Assert.False(box.Enabled);
+        Assert.False(manager.Playlists[1].Shuffle);
+        Assert.True(manager.Playlists[0].Shuffle); // the others are not touched
+        var saved = setup.SavedLibrary().Playlists;
+        Assert.False(saved[1].Shuffle); // saved with the playlist
+        Assert.True(saved[0].Shuffle);
+        Assert.False(List(dialog).Items[2].Checked);
+        Assert.True(List(dialog).Items[1].Checked);
+        Assert.True(List(dialog).Items[1].Selected); // the list was rebuilt, the selection stays
+
+        List(dialog).Items[2].Checked = true;
+        await Async.SettleAsync();
+        Assert.True(manager.Playlists[1].Shuffle);
+        Assert.True(List(dialog).Items[2].Checked);
+    }, sta: true);
+
+    [Fact]
+    public void TheCheckBoxesShowTheSavedOrder_AndFollowChangesFromElsewhere() => UiContext.Run(async () =>
+    {
+        var setup = ThreePlaylists();
+        setup.Library.Playlists[0].Shuffle = false;
+        var (_, manager) = await LoadAsync(setup);
+        using var __ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        Assert.False(List(dialog).Items[1].Checked); // Alpha plays in order
+        Assert.True(List(dialog).Items[2].Checked);
+
+        manager.ToggleShuffle(); // e.g. !toggleshuffle in the chat
+        await Async.SettleAsync();
+
+        Assert.True(List(dialog).Items[1].Checked);
+    }, sta: true);
+
+    [Fact]
+    public void TheAllPlaylistsCheckBox_CannotBeChanged() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        List(dialog).Items[0].Checked = false; // "All playlists" always plays in random order
+        await Async.SettleAsync();
+
+        Assert.True(List(dialog).Items[0].Checked);
+        Assert.All(manager.Playlists, p => Assert.True(p.Shuffle));
+    }, sta: true);
+
+    [Fact]
+    public void WhenSavingTheOrderFails_TheCheckBoxShowsTheOldValueAgain() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var file = Path.Combine(setup.Folder, "playlists.json");
+        File.SetAttributes(file, FileAttributes.ReadOnly); // can be read, cannot be replaced
+        Ui.AnswerNextMessageBox(DialogResult.OK);
+        try
+        {
+            List(dialog).Items[2].Checked = false;
+            await Async.SettleAsync();
+
+            Assert.True(manager.Playlists[1].Shuffle);
+            Assert.True(List(dialog).Items[2].Checked);
+        }
+        finally
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
     }, sta: true);
 
     [Theory]
@@ -142,8 +183,8 @@ public class PlaylistDialogTests
         await manager.SelectAsync(null);
         using var dialog = new PlaylistDialog(manager);
 
-        Assert.Equal("▶ All playlists", List(dialog).Items[0].Text);
-        Assert.Equal("3", List(dialog).Items[0].SubItems[1].Text);
+        Assert.Equal("▶ All playlists", List(dialog).Items[0].SubItems[1].Text);
+        Assert.Equal("3", List(dialog).Items[0].SubItems[2].Text);
     }, sta: true);
 
     [Fact]
@@ -196,7 +237,7 @@ public class PlaylistDialogTests
         await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated"));
 
         Assert.Equal("Updated \"Beta\": +2 / −0 videos (3 in total).", Status(dialog).Text);
-        Assert.Equal("3", List(dialog).Items[2].SubItems[1].Text); // the list refreshed
+        Assert.Equal("3", List(dialog).Items[2].SubItems[2].Text); // the list refreshed
     }, sta: true);
 
     [Fact]
@@ -215,7 +256,7 @@ public class PlaylistDialogTests
 
         Assert.Equal("Updated 3 playlist(s): +3 / −1 videos.", Status(dialog).Text);
         Assert.Equal(SystemColors.GrayText, Status(dialog).ForeColor);
-        Assert.Equal("2", List(dialog).Items[3].SubItems[1].Text);
+        Assert.Equal("2", List(dialog).Items[3].SubItems[2].Text);
     }, sta: true);
 
     [Fact]
@@ -236,7 +277,7 @@ public class PlaylistDialogTests
 
         Assert.Equal("Gamma", manager.Playlists[1].Title);
         Assert.Equal("Renamed to \"Gamma\".", Status(dialog).Text);
-        Assert.Equal("    Gamma", List(dialog).Items[2].Text);
+        Assert.Equal("    Gamma", List(dialog).Items[2].SubItems[1].Text);
     }, sta: true);
 
     [Fact]
@@ -444,7 +485,7 @@ public class PlaylistDialogTests
         var dialog = new PlaylistDialog(manager).ShowHidden();
 
         manager.Rename(IdB, "Renamed elsewhere");
-        Assert.Equal("    Renamed elsewhere", List(dialog).Items[2].Text);
+        Assert.Equal("    Renamed elsewhere", List(dialog).Items[2].SubItems[1].Text);
 
         dialog.Close();
         manager.Rename(IdB, "After close"); // must not touch the disposed dialog
