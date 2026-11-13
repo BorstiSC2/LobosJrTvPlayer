@@ -11,7 +11,8 @@ using YouTubeVideoPlayer.Playlists;
 namespace YouTubeVideoPlayer.UI
 {
     /// <summary>
-    /// Lists the playlists and lets the user play, add, rename, remove and update them.
+    /// Lists the playlists and lets the user play, add, rename, remove and update them. Below the list, the automatic
+    /// swap to the next playlist is switched on and off and its interval is set (in days and hours).
     /// </summary>
     public sealed class PlaylistDialog : Form
     {
@@ -35,6 +36,12 @@ namespace YouTubeVideoPlayer.UI
         private readonly Button _removeButton;
         private readonly Button _updateButton;
         private readonly Button _updateAllButton;
+        private readonly ToggleSwitch _autoSwapSwitch;
+        private readonly NumericUpDown _swapDays;
+        private readonly NumericUpDown _swapHours;
+        private readonly Label _swapInfoLabel;
+        // Set while the swap controls are filled from the saved setting, which must not be taken for an edit.
+        private bool _updatingSwap;
         // Playlists that an update (of several) has not finished yet; they all show the loading symbol from the start.
         private readonly HashSet<string> _pending = new();
         private bool _refreshing;
@@ -50,8 +57,9 @@ namespace YouTubeVideoPlayer.UI
             ShowInTaskbar = false;
             // Estimated once (about 7 px per character at 100 %), not measured at runtime: all five columns plus
             // the button column fit without resizing the window (columns 815 + scroll bar 20 + buttons 162 + margins 48).
-            Size = new Size(1060, 460);
-            MinimumSize = new Size(600, 300);
+            // The height leaves room for the automatic swap below the list.
+            Size = new Size(1060, 530);
+            MinimumSize = new Size(600, 380);
             KeyPreview = true;
             BackColor = SurfaceColor;
             if (AppIcon.Instance is { } icon)
@@ -112,6 +120,7 @@ namespace YouTubeVideoPlayer.UI
 
             _statusLabel = new Label
             {
+                Name = "status",
                 Dock = DockStyle.Bottom,
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = SystemColors.GrayText,
@@ -120,8 +129,51 @@ namespace YouTubeVideoPlayer.UI
             UpdateStatusHeight();
             _statusLabel.FontChanged += (_, __) => UpdateStatusHeight();
 
+            // The automatic swap, below the list (the button column stays to the right of both):
+            // [switch] Swap playlists automatically every [7] days [0] hours, and a line that says when and to which playlist.
+            _autoSwapSwitch = new ToggleSwitch
+            {
+                Text = "Swap playlists automatically every",
+                Anchor = AnchorStyles.Left, // centered in the row of the flow panel
+                Margin = new Padding(0, 0, 6, 0)
+            };
+            _swapDays = NewNumberBox(AutoSwapSettings.MaxIntervalHours / 24);
+            _swapHours = NewNumberBox(23);
+            var swapRow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = Padding.Empty
+            };
+            swapRow.Controls.AddRange(new Control[] { _autoSwapSwitch, _swapDays, NewInlineLabel("days"), _swapHours, NewInlineLabel("hours") });
+
+            _swapInfoLabel = new Label
+            {
+                Name = "autoSwapInfo",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                Margin = new Padding(0, 4, 0, 0)
+            };
+            var swapPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(0, 10, 0, 0)
+            };
+            swapPanel.Controls.Add(swapRow);
+            swapPanel.Controls.Add(_swapInfoLabel);
+            // A long line wraps instead of being cut off.
+            swapPanel.SizeChanged += (_, __) => _swapInfoLabel.MaximumSize = new Size(Math.Max(100, swapPanel.ClientSize.Width), 0);
+
+            // Docked from the last one added: the status line at the bottom, the buttons to the right, the swap below the list.
             var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 16, 16, 8) };
             content.Controls.Add(_listView);
+            content.Controls.Add(swapPanel);
             content.Controls.Add(buttonPanel);
             content.Controls.Add(_statusLabel);
             Controls.Add(content);
@@ -129,6 +181,9 @@ namespace YouTubeVideoPlayer.UI
 
             _listView.SelectedIndexChanged += (_, __) => UpdateButtons();
             _listView.ItemChecked += OnItemChecked;
+            _autoSwapSwitch.CheckedChanged += (_, __) => ApplyAutoSwap();
+            _swapDays.ValueChanged += (_, __) => ApplyAutoSwap();
+            _swapHours.ValueChanged += (_, __) => ApplyAutoSwap();
             // No double-click handler on purpose: the ListView itself toggles the check box ("random order")
             // on a double-click, and playing a playlist is what the highlighted button and Enter are for.
             KeyDown += OnKeyDown;
@@ -137,16 +192,20 @@ namespace YouTubeVideoPlayer.UI
             Load += (_, __) =>
             {
                 RefreshList();
+                SizeNumberBoxes();
                 EnsureButtonsFit(buttonPanel, content);
             };
+            FontChanged += (_, __) => SizeNumberBoxes();
 
             _playlists.PlaylistsChanged += OnPlaylistsChanged;
             _playlists.PoolChanged += OnPlaylistsChanged;
+            _playlists.AutoSwapChanged += OnAutoSwapChanged;
             FormClosed += (_, __) =>
             {
                 _listView.SmallImageList?.Dispose();
                 _playlists.PlaylistsChanged -= OnPlaylistsChanged;
                 _playlists.PoolChanged -= OnPlaylistsChanged;
+                _playlists.AutoSwapChanged -= OnAutoSwapChanged;
             };
 
             RefreshList();
@@ -222,6 +281,34 @@ namespace YouTubeVideoPlayer.UI
             Apply();
         }
 
+        /// <summary>A number box for the swap interval, sized for its largest value by <see cref="SizeNumberBoxes"/>.</summary>
+        private static NumericUpDown NewNumberBox(int maximum) => new()
+        {
+            Minimum = 0,
+            Maximum = maximum,
+            TextAlign = HorizontalAlignment.Right,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 4, 0)
+        };
+
+        private static Label NewInlineLabel(string text) => new()
+        {
+            Text = text,
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 12, 0)
+        };
+
+        /// <summary>The number boxes are as wide as their largest value needs in the current font, plus the arrows.</summary>
+        private void SizeNumberBoxes()
+        {
+            foreach (var box in new[] { _swapDays, _swapHours })
+            {
+                var digits = new string('0', box.Maximum.ToString().Length + 1);
+                box.Width = TextRenderer.MeasureText(digits, box.Font).Width + SystemInformation.VerticalScrollBarWidth + 8;
+            }
+        }
+
         /// <summary>A list view that paints without flicker (important with the Explorer theme and taller rows).</summary>
         private sealed class BufferedListView : ListView
         {
@@ -262,6 +349,12 @@ namespace YouTubeVideoPlayer.UI
                 RefreshList();
         }
 
+        private void OnAutoSwapChanged(object? sender, EventArgs e)
+        {
+            if (!IsDisposed)
+                UpdateAutoSwapControls();
+        }
+
         /// <summary>
         /// The tag of the selected row: <see cref="AllPlaylistsTag"/>, a playlist key, or <c>null</c> if nothing is selected.
         /// </summary>
@@ -296,6 +389,7 @@ namespace YouTubeVideoPlayer.UI
             }
 
             UpdateButtons();
+            UpdateAutoSwapControls(); // the number of playlists and the next playlist may have changed
         }
 
         private void FillList()
@@ -442,12 +536,7 @@ namespace YouTubeVideoPlayer.UI
             }
             catch (Exception ex)
             {
-                Logger.Log("Playlist dialog action failed.", ex);
-                if (!IsDisposed)
-                {
-                    SetStatus(ex.Message, isError: true);
-                    MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
+                ReportError(ex);
             }
             finally
             {
@@ -456,6 +545,102 @@ namespace YouTubeVideoPlayer.UI
                     UpdateButtons();
             }
         }
+
+        private void ReportError(Exception ex)
+        {
+            Logger.Log("Playlist dialog action failed.", ex);
+            if (IsDisposed)
+                return;
+
+            SetStatus(ex.Message, isError: true);
+            MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        #region Automatic swap
+
+        /// <summary>
+        /// The switch or the interval was changed: save it (which starts the interval over). Saving is quick and touches
+        /// nothing an action in progress uses, so this also works while an update runs.
+        /// </summary>
+        private void ApplyAutoSwap()
+        {
+            if (_updatingSwap || IsDisposed)
+                return;
+
+            // An hour is the shortest interval; setting it applies it through ValueChanged.
+            if (_swapDays.Value == 0 && _swapHours.Value == 0)
+            {
+                _swapHours.Value = 1;
+                return;
+            }
+
+            var interval = TimeSpan.FromDays((double)_swapDays.Value) + TimeSpan.FromHours((double)_swapHours.Value);
+            try
+            {
+                _playlists.SetAutoSwap(_autoSwapSwitch.Checked, interval);
+            }
+            catch (Exception ex)
+            {
+                UpdateAutoSwapControls(); // show the setting that is really saved
+                ReportError(ex);
+            }
+        }
+
+        /// <summary>Shows the saved setting; the switch can only be turned on with two playlists or more.</summary>
+        private void UpdateAutoSwapControls()
+        {
+            _updatingSwap = true;
+            try
+            {
+                var available = _playlists.CanAutoSwap;
+                _autoSwapSwitch.Enabled = available;
+                _swapDays.Enabled = available;
+                _swapHours.Enabled = available;
+
+                if (_autoSwapSwitch.Checked != _playlists.AutoSwapEnabled)
+                    _autoSwapSwitch.Checked = _playlists.AutoSwapEnabled;
+
+                // Only set when different, so a number that is being typed is not replaced by a refresh.
+                var interval = _playlists.AutoSwapInterval;
+                var days = (decimal)(int)interval.TotalDays;
+                var hours = (decimal)interval.Hours;
+                if (_swapDays.Value != days)
+                    _swapDays.Value = days;
+                if (_swapHours.Value != hours)
+                    _swapHours.Value = hours;
+            }
+            finally
+            {
+                _updatingSwap = false;
+            }
+
+            var (text, isWarning) = DescribeAutoSwap();
+            _swapInfoLabel.Text = text;
+            _swapInfoLabel.ForeColor = isWarning ? Color.Firebrick : SystemColors.GrayText;
+        }
+
+        /// <summary>The line below the switch: when and to which playlist the next swap goes.</summary>
+        private (string Text, bool IsWarning) DescribeAutoSwap()
+        {
+            if (!_playlists.CanAutoSwap)
+                return ("Add a second playlist to swap playlists automatically.", false);
+
+            if (!_playlists.AutoSwapEnabled)
+                return ("Off: the playlist only changes when you switch it.", false);
+
+            var next = _playlists.GetNextPlaylist();
+            if (next == null)
+                return ("No other playlist can be played right now, so the playlist is not swapped.", true);
+
+            var since = _playlists.LastSwapUtc is { } last ? $" (counted from the last change, {last.LocalDateTime:g})" : string.Empty;
+            if (_playlists.IsSwapDue)
+                return ($"Swap due: \"{next.Title}\" follows the current video{since}.", false);
+
+            var due = _playlists.NextSwapUtc!.Value.LocalDateTime;
+            return ($"Next: \"{next.Title}\" on {due:g}, after the video that is playing then{since}.", false);
+        }
+
+        #endregion
 
         private async Task PlaySelectedAsync()
         {

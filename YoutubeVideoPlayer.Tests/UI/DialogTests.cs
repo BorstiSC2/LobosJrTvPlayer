@@ -28,7 +28,7 @@ public class PlaylistDialogTests
 
     private static ListView List(Form dialog) => dialog.All<ListView>().Single();
 
-    private static Label Status(Form dialog) => dialog.All<Label>().Single();
+    private static Label Status(Form dialog) => dialog.All<Label>().Single(l => l.Name == "status");
 
     private static void SelectRow(Form dialog, int index)
     {
@@ -70,7 +70,8 @@ public class PlaylistDialogTests
         using var dialog = new PlaylistDialog(manager).ShowHidden();
 
         Assert.True(List(dialog).CheckBoxes);
-        Assert.Empty(dialog.All<CheckBox>()); // no separate check box control any more
+        // No separate check box for the order any more; the only one outside the grid is the automatic swap.
+        Assert.IsType<ToggleSwitch>(Assert.Single(dialog.All<CheckBox>()));
         Assert.All(List(dialog).Items.Cast<ListViewItem>(), item => Assert.True(item.Checked)); // all random by default
     }, sta: true);
 
@@ -586,6 +587,169 @@ public class PlaylistDialogTests
         dialog.Close();
         manager.Rename(IdB, "After close"); // must not touch the disposed dialog
     }, sta: true);
+
+    #region Automatic swap
+
+    private static ToggleSwitch SwapSwitch(Form dialog) => dialog.All<ToggleSwitch>().Single();
+
+    // The row reads "[switch] Swap playlists automatically every [days] days [hours] hours".
+    private static NumericUpDown Days(Form dialog) => dialog.All<NumericUpDown>().ElementAt(0);
+
+    private static NumericUpDown Hours(Form dialog) => dialog.All<NumericUpDown>().ElementAt(1);
+
+    private static string SwapInfo(Form dialog) => dialog.All<Label>().Single(l => l.Name == "autoSwapInfo").Text;
+
+    private static Rectangle ScreenBounds(Control control) => control.RectangleToScreen(control.ClientRectangle);
+
+    [Fact]
+    public void TheAutomaticSwap_IsBelowTheList_OffAtFirst_WithAWeekAsInterval() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        Assert.True(ScreenBounds(SwapSwitch(dialog)).Top >= ScreenBounds(List(dialog)).Bottom);
+        Assert.True(ScreenBounds(SwapSwitch(dialog)).Bottom <= ScreenBounds(Status(dialog)).Top);
+        Assert.Equal("Swap playlists automatically every", SwapSwitch(dialog).Text);
+        Assert.True(SwapSwitch(dialog).Enabled);
+        Assert.False(SwapSwitch(dialog).Checked);
+        Assert.Equal(7, Days(dialog).Value);
+        Assert.Equal(0, Hours(dialog).Value);
+        Assert.Equal("Off: the playlist only changes when you switch it.", SwapInfo(dialog));
+    }, sta: true);
+
+    [Fact]
+    public void WithASinglePlaylist_TheAutomaticSwapCannotBeTurnedOn() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(new PlaylistSetup().WithPlaylist(IdA, "Alpha", selected: true).WithCache(IdA, "a1"));
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        Assert.False(SwapSwitch(dialog).Enabled);
+        Assert.False(Days(dialog).Enabled);
+        Assert.False(Hours(dialog).Enabled);
+        Assert.Equal("Add a second playlist to swap playlists automatically.", SwapInfo(dialog));
+    }, sta: true);
+
+    [Fact]
+    public void TurningTheSwitchOn_SavesIt_AndTellsWhenAndToWhichPlaylistTheNextSwapGoes() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        SwapSwitch(dialog).Checked = true;
+
+        Assert.True(manager.AutoSwapEnabled);
+        Assert.Equal(TimeSpan.FromDays(7), manager.AutoSwapInterval);
+        Assert.True(setup.SavedLibrary().AutoSwap.Enabled);
+        var info = SwapInfo(dialog);
+        Assert.StartsWith($"Next: \"Beta\" on {manager.NextSwapUtc!.Value.LocalDateTime:g}, after the video that is playing then", info);
+        Assert.Contains($"counted from the last change, {manager.LastSwapUtc!.Value.LocalDateTime:g}", info);
+
+        SwapSwitch(dialog).Checked = false;
+        Assert.False(manager.AutoSwapEnabled);
+        Assert.False(setup.SavedLibrary().AutoSwap.Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void ChangingTheDaysOrHours_SavesTheInterval() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SwapSwitch(dialog).Checked = true;
+
+        Days(dialog).Value = 2;
+        Hours(dialog).Value = 5;
+
+        Assert.Equal(TimeSpan.FromDays(2) + TimeSpan.FromHours(5), manager.AutoSwapInterval);
+        Assert.Equal(53, setup.SavedLibrary().AutoSwap.IntervalHours);
+        Assert.True(manager.AutoSwapEnabled);
+    }, sta: true);
+
+    [Fact]
+    public void NoDaysAndNoHours_BecomeOneHour_TheShortestInterval() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        Days(dialog).Value = 0;
+
+        Assert.Equal(1, Hours(dialog).Value);
+        Assert.Equal(TimeSpan.FromHours(1), manager.AutoSwapInterval);
+    }, sta: true);
+
+    [Fact]
+    public void ChangesFromElsewhere_ShowInTheSwapControls() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        manager.SetAutoSwap(true, TimeSpan.FromDays(3) + TimeSpan.FromHours(12));
+        Assert.True(SwapSwitch(dialog).Checked);
+        Assert.Equal(3, Days(dialog).Value);
+        Assert.Equal(12, Hours(dialog).Value);
+
+        await manager.SelectAsync(IdB); // e.g. !skipplaylist in the chat
+        Assert.StartsWith("Next: \"Alpha\"", SwapInfo(dialog)); // the one after Beta could not be loaded, so it starts over
+
+        manager.Remove(IdC);
+        manager.Remove(IdB); // a single playlist is left: the swap is turned off
+        Assert.False(SwapSwitch(dialog).Checked);
+        Assert.False(SwapSwitch(dialog).Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void WhenSavingTheSwapFails_TheSwitchShowsTheSavedSettingAgain() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var file = Path.Combine(setup.Folder, "playlists.json");
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+        string? message = null;
+        Ui.AnswerNextMessageBox(DialogResult.OK, text => message = text);
+        try
+        {
+            SwapSwitch(dialog).Checked = true;
+            await Async.WaitUntilAsync(() => message != null);
+
+            Assert.False(manager.AutoSwapEnabled);
+            Assert.False(SwapSwitch(dialog).Checked);
+            Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+        }
+        finally
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+    }, sta: true);
+
+    [Theory]
+    [InlineData(9f)]
+    [InlineData(16f)]
+    public void TheSwapControlsGrowWithTheFont(float fontSize) => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager) { Font = new Font("Segoe UI", fontSize) };
+        dialog.ShowHidden();
+        await Async.SettleAsync();
+
+        var toggle = SwapSwitch(dialog);
+        var text = TextRenderer.MeasureText(toggle.Text, toggle.Font);
+        Assert.True(toggle.Width >= text.Width + 2 * text.Height, $"the switch is {toggle.Width} px wide for {text.Width} px of text");
+        Assert.True(toggle.Height >= text.Height);
+        foreach (var box in new[] { Days(dialog), Hours(dialog) })
+            Assert.True(box.Width >= TextRenderer.MeasureText("365", box.Font).Width + SystemInformation.VerticalScrollBarWidth);
+
+        var row = ScreenBounds(Hours(dialog).Parent!);
+        Assert.True(dialog.RectangleToScreen(dialog.ClientRectangle).Contains(row), "the swap row lies outside the dialog");
+    }, sta: true);
+
+    #endregion
 }
 
 public class AddPlaylistDialogTests

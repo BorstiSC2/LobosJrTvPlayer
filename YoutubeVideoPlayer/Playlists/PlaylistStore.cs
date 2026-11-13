@@ -42,7 +42,12 @@ namespace YouTubeVideoPlayer.Playlists
         {
             var library = JsonFile.ReadOrQuarantine<PlaylistLibrary>(path, "it will be recreated.");
             if (library != null)
+            {
                 library.Playlists ??= new();
+                library.AutoSwap ??= new();
+                library.AutoSwap.IntervalHours = Math.Clamp(
+                    library.AutoSwap.IntervalHours, AutoSwapSettings.MinIntervalHours, AutoSwapSettings.MaxIntervalHours);
+            }
 
             return library;
         }

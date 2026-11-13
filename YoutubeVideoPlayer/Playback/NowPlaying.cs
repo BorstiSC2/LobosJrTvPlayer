@@ -35,6 +35,12 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         void QueueNextVideo(string videoId);
 
+        /// <summary>Whether a video is queued with <see cref="QueueNextVideo"/> and has not been started yet.</summary>
+        bool HasQueuedVideo { get; }
+
+        /// <summary>A new video started playing (it is <see cref="Current"/> now).</summary>
+        event EventHandler<NowPlaying>? NowPlayingChanged;
+
         /// <summary>
         /// Keeps the next video from starting when the current one ends, until the returned hold is released
         /// (a vote about the next video that lasts longer than the current video). Meanwhile the screen is black

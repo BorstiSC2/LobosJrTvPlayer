@@ -60,6 +60,7 @@ namespace YouTubeVideoPlayer
             SkipVoteManager? votes = null;
             ChatCommandManager? commands = null;
             AutoVoteManager? autoVote = null;
+            PlaylistAnnouncer? announcer = null;
             if (twitch != null)
             {
                 votes = new SkipVoteManager(
@@ -70,6 +71,7 @@ namespace YouTubeVideoPlayer
                     TimeSpan.FromSeconds(twitchSettings!.SkipVoteDurationSeconds),
                     SkipVoteManager.OptionCount);
                 autoVote = new AutoVoteManager(twitch, playback, votes);
+                announcer = new PlaylistAnnouncer(twitch, playlists, playback);
 
                 commands = new ChatCommandManager(
                     twitch,
@@ -82,6 +84,8 @@ namespace YouTubeVideoPlayer
                         new PauseCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new ToggleShuffleCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
+                        new PlaylistCommand(playlists, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
+                        new SkipPlaylistCommand(playlists, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new AutoVoteStatusCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new ToggleAutoVoteCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
@@ -96,6 +100,7 @@ namespace YouTubeVideoPlayer
             }
 
             using var coordinator = new AppCoordinator(playback, playlists, twitch);
+            using var swapScheduler = new PlaylistSwapScheduler(playlists, playback, votes == null ? null : () => votes.IsRunning);
 
             try
             {
@@ -105,6 +110,7 @@ namespace YouTubeVideoPlayer
             finally
             {
                 autoVote?.Dispose();
+                announcer?.Dispose();
                 commands?.Dispose();
                 votes?.Dispose();
                 if (twitch != null)

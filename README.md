@@ -8,6 +8,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 
 - Playback from YouTube playlists, per playlist in random order or one video after the other
 - Playlist dialog to add, rename, remove, update and switch playlists
+- Automatic playlist swap: after a set number of days and hours the next playlist takes over, at the end of the video that is playing then
 - Cached video lists per playlist – instant switching, YouTube is only contacted when needed
 - Streams directly from YouTube
 - Automatic selection of the best video and audio stream (up to 1440p, no HDR, easy-to-decode codecs first; for videos with several audio languages the English track is played, not an automatically dubbed translation)
@@ -19,7 +20,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!skip` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- Twitch chat bot with `!current`, `!timestamp`, `!skip`, `!playlist`, `!skipplaylist` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
 
 ---
 
@@ -51,6 +52,7 @@ Click **Playlists** in the control bar to open the playlist dialog.
 | Update all | Updates every playlist one after another; the video keeps playing meanwhile. All playlists show ⟳ until their own update is done |
 | Select several rows (Shift+click, Ctrl+click) | Only Remove, Update, Update all and Close stay enabled; Remove and Update then apply to all selected playlists |
 | Random order (checkbox in the list; a double-click on a row toggles it too, it does not open the playlist) | Switches the playlist between random order and playlist order; saved with the playlist |
+| Swap playlists automatically every *n* days *n* hours (switch below the list) | Turns the automatic playlist swap on or off and sets its interval (see below). Needs at least two playlists |
 
 Links to a single video that contain `&list=...` are accepted as well.
 
@@ -60,7 +62,7 @@ All files live next to the executable.
 
 | File | Content |
 |------|---------|
-| `playlists.json` | The playlists (title, link, order) and the selected one. Created from `playlists.default.json` on first start |
+| `playlists.json` | The playlists (title, link, order), the selected one and the automatic swap (on/off, interval, last change). Created from `playlists.default.json` on first start |
 | `PlaylistCache/<playlist id>.json` | The cached video IDs of one playlist |
 
 Example `playlists.json`:
@@ -71,11 +73,22 @@ Example `playlists.json`:
   "playlists": [
     { "title": "Music", "url": "https://www.youtube.com/playlist?list=PL...", "shuffle": true },
     { "title": "Lets Play", "url": "https://www.youtube.com/playlist?list=PL...", "shuffle": false }
-  ]
+  ],
+  "autoSwap": { "enabled": true, "intervalHours": 168, "lastSwapUtc": "2026-11-13T18:00:00+00:00" }
 }
 ```
 
 `selectedPlaylistUrl: null` plays all playlists combined.
+
+### Automatic playlist swap
+
+Below the list in the **Playlists** dialog, the switch **Swap playlists automatically every [7] days [0] hours** lets the playlists take turns: when the interval is up, the next playlist of the list takes over (after the last one the first; after **All playlists** the first one). Playlists that could not be loaded are skipped, and **All playlists** is never swapped to. The line below the switch says when the next swap is due and which playlist comes next.
+
+- The video that is playing when the time is up is **not interrupted**. About 5½ minutes before it ends, the next playlist is selected, so the video after it comes from the next playlist – and so do the options of an **Autovote**, which starts 5 minutes before the end. A video that is shorter than that is followed by the next playlist straight away. While a vote about the next video runs or its winner is waiting, the swap waits for the end of the winner's video.
+- While the app is paused before the first **Play**, the next playlist takes over at once and its first video is prepared.
+- The interval counts from the **last change**: an automatic swap, a switch by hand (**Switch to playlist**, `!skipplaylist`), or a change of the setting (turning it on or off, another interval). The setting and the time of the last change are saved in `playlists.json`, so a restart does not reset the interval; a swap that fell due while the app was closed happens right after the next start.
+- It needs at least two playlists; removing playlists until only one is left turns it off.
+- When the first video of the new playlist starts and the Twitch bot is connected, the bot posts `New Playlist has begun: <name>` – after an automatic swap as well as after a switch by hand or `!skipplaylist`.
 
 ### Random or in order
 
@@ -108,6 +121,8 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!play` | privileged | Continues a paused video, or starts the first video while the player still waits for the first Play |
 | `!shufflestatus` | everyone | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
+| `!playlist` | everyone | Replies `Current playlist: "<name>" (shuffled)` or `(in playlist order)` |
+| `!skipplaylist` | privileged | Switches to the next playlist now (the current video is skipped); the bot then announces `New Playlist has begun: <name>` |
 | `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes before a video ends) |
 | `!toggleautovote` | privileged | Switches Autovote on or off (like the checkbox in the control bar, which follows) and posts the new value |
 | `!vodcommands` | everyone | Lists the commands everyone may use. Built from the registered commands, so new commands appear automatically |
@@ -119,7 +134,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
@@ -277,7 +292,7 @@ YoutubeVideoPlayer/
 ├── AppCoordinator.cs       Startup sequence; starts/switches playback when the playlist pool changes
 ├── Playback/               PlaybackManager (buffering timeout, fail-safe), NextVideoPrefetcher (no gap between videos), VlcMediaPlayer (LibVLC)
 ├── YouTube/                YouTubeService (YoutubeExplode), stream selection (video quality, audio language)
-├── Playlists/              PlaylistManager, playlists.json store, per-playlist cache
+├── Playlists/              PlaylistManager, playlists.json store, per-playlist cache, PlaylistSwapScheduler (automatic swap)
 ├── Twitch/                 TwitchChatService, ChatCommandManager, Commands/, Voting/, Auth/ (sign-in)
 ├── UI/                     Main form (view only), window modes, dialogs
 └── Infrastructure/         Logger, JSON file helpers, UI-thread timer

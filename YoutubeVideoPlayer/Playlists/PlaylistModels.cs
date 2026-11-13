@@ -24,6 +24,34 @@ namespace YouTubeVideoPlayer.Playlists
         public string? SelectedPlaylistUrl { get; set; }
 
         public List<PlaylistEntry> Playlists { get; set; } = new();
+
+        /// <summary>The automatic playlist swap (off unless the user turned it on).</summary>
+        public AutoSwapSettings AutoSwap { get; set; } = new();
+    }
+
+    /// <summary>
+    /// The automatic playlist swap, stored in <c>playlists.json</c> so that a restart does not reset it: once
+    /// <see cref="IntervalHours"/> have passed since <see cref="LastSwapUtc"/>, the next playlist takes over.
+    /// </summary>
+    public sealed class AutoSwapSettings
+    {
+        public const int MinIntervalHours = 1;
+
+        /// <summary>What the playlist dialog can show: 365 days and 23 hours.</summary>
+        public const int MaxIntervalHours = 365 * 24 + 23;
+
+        public const int DefaultIntervalHours = 7 * 24;
+
+        public bool Enabled { get; set; }
+
+        /// <summary>How long each playlist plays before the next one takes over.</summary>
+        public int IntervalHours { get; set; } = DefaultIntervalHours;
+
+        /// <summary>
+        /// When the interval started: the last change of the playlist (an automatic swap, or one by hand) or of this
+        /// setting. <c>null</c> in files written before the setting existed.
+        /// </summary>
+        public DateTimeOffset? LastSwapUtc { get; set; }
     }
 
     /// <summary>The cached video IDs of one playlist, stored in <c>PlaylistCache/&lt;playlistId&gt;.json</c>.</summary>
@@ -88,12 +116,21 @@ namespace YouTubeVideoPlayer.Playlists
 
     public sealed class PoolChangedEventArgs : EventArgs
     {
-        public PoolChangedEventArgs(bool selectionChanged)
+        public PoolChangedEventArgs(bool selectionChanged, bool keepCurrentVideo = false)
         {
             SelectionChanged = selectionChanged;
+            KeepCurrentVideo = keepCurrentVideo;
         }
 
-        /// <summary><c>true</c> if the user picked another playlist (so the current video should be skipped).</summary>
+        /// <summary>
+        /// <c>true</c> if another playlist was selected. The current video is skipped, unless <see cref="KeepCurrentVideo"/> is set.
+        /// </summary>
         public bool SelectionChanged { get; }
+
+        /// <summary>
+        /// The selection changed, but the current video plays to its end (an automatic swap): only the videos after it
+        /// come from the new selection.
+        /// </summary>
+        public bool KeepCurrentVideo { get; }
     }
 }

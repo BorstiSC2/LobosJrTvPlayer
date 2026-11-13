@@ -69,11 +69,14 @@ public sealed class PlaylistSetup : IDisposable
         return this;
     }
 
-    public PlaylistManager Create()
+    public PlaylistManager Create(TimeProvider? time = null)
     {
         Store.Save(Library);
-        return new PlaylistManager(YouTube, Store, Cache);
+        return Reopen(time);
     }
+
+    /// <summary>A manager on the files as they are now, without saving <see cref="Library"/> first (like a restart of the app).</summary>
+    public PlaylistManager Reopen(TimeProvider? time = null) => new(YouTube, Store, Cache, time);
 
     public PlaylistLibrary SavedLibrary() => new PlaylistStore(_dir.Path).Load();
 

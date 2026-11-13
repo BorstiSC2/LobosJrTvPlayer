@@ -59,13 +59,14 @@ namespace YouTubeVideoPlayer
 
             if (!_playbackStarted)
                 StartPlaybackIfPossible();
-            else if (e.SelectionChanged)
+            else if (e.SelectionChanged && !e.KeepCurrentVideo)
             {
                 // A video queued by a chat vote comes from the previous selection.
                 _playback.ClearQueuedVideo();
                 _playback.SkipAsync().FireAndForget("Switching to the selected playlist failed.");
             }
-            // Otherwise the pool only grew or was updated; the current video keeps playing.
+            // Otherwise the pool only grew or was updated, or an automatic swap lets the current video play to its end
+            // (it only swaps while no vote winner is queued); the next video comes from the new pool.
         }
 
         private void OnPlaylistsChanged(object? sender, EventArgs e)

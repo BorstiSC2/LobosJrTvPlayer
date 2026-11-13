@@ -160,6 +160,30 @@ public class AppCoordinatorTests
     });
 
     [Fact]
+    public void AnAutomaticSwap_LetsTheCurrentVideoPlayToItsEnd_AndTheNextVideoComesFromTheNewPlaylist() => UiContext.Run(async () =>
+    {
+        using var app = new App(new PlaylistSetup()
+            .WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1")
+            .WithPlaylist(IdB, "B").WithCache(IdB, "b1"));
+        await app.Coordinator.StartAsync();
+        await app.Playback.PlayNextAsync();
+        app.Player.ClearReceivedCalls();
+
+        await app.Playlists.SelectAsync(IdB, keepCurrentVideo: true);
+        await app.NextVideoDelayAsync();
+
+        app.Player.DidNotReceive().Stop();
+        Assert.Empty(app.Played());
+        Assert.Equal("a1", app.Playback.Current?.VideoId);
+
+        app.Player.EndReached += Raise.Event();
+        await app.NextVideoDelayAsync();
+        await app.NextVideoDelayAsync();
+
+        Assert.Equal(new[] { "b1" }, app.Played());
+    });
+
+    [Fact]
     public void AGrowingPool_DoesNotInterruptTheCurrentVideo() => UiContext.Run(async () =>
     {
         using var app = new App(new PlaylistSetup().WithPlaylist(IdA, "A").WithCache(IdA, "a1").OnYouTube(IdB, "b1"));

@@ -343,6 +343,8 @@ namespace YouTubeVideoPlayer.Playback
             RestartPrefetch();
         }
 
+        public bool HasQueuedVideo => _queuedVideoId != null;
+
         /// <summary>Forgets a queued video, e.g. because the pool it came from was switched.</summary>
         public void ClearQueuedVideo()
         {

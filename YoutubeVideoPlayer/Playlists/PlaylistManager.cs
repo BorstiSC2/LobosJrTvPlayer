@@ -21,11 +21,12 @@ namespace YouTubeVideoPlayer.Playlists
     /// All public members must be called on the UI thread; downloads and file reads run on the
     /// thread pool and their results are applied back on the UI thread.
     /// </remarks>
-    public sealed class PlaylistManager : IVideoSource, IShuffleControl
+    public sealed class PlaylistManager : IVideoSource, IShuffleControl, IPlaylistSwitch
     {
         private readonly IYouTubeService _youtube;
         private readonly PlaylistStore _store;
         private readonly PlaylistCache _cache;
+        private readonly TimeProvider _time;
         private readonly List<PlaylistInfo> _playlists = new();
         private readonly Dictionary<string, Task> _loadTasks = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Task<PlaylistUpdateResult>> _updateTasks = new(StringComparer.Ordinal);
@@ -35,11 +36,13 @@ namespace YouTubeVideoPlayer.Playlists
         private bool _poolShuffled = true; // IsShuffled when the pool was last built
         private bool _libraryLoadFailed;
 
-        public PlaylistManager(IYouTubeService youtube, PlaylistStore store, PlaylistCache cache)
+        /// <param name="timeProvider">The clock for the automatic swap; <see cref="TimeProvider.System"/> by default.</param>
+        public PlaylistManager(IYouTubeService youtube, PlaylistStore store, PlaylistCache cache, TimeProvider? timeProvider = null)
         {
             _youtube = youtube;
             _store = store;
             _cache = cache;
+            _time = timeProvider ?? TimeProvider.System;
         }
 
         public IReadOnlyList<PlaylistInfo> Playlists => _playlists;
@@ -51,6 +54,9 @@ namespace YouTubeVideoPlayer.Playlists
 
         public bool IsLoading => _playlists.Any(p => p.State == PlaylistLoadState.Loading);
 
+        /// <summary>The library and the selected playlist are loaded (<see cref="InitializeAsync"/> has finished).</summary>
+        public bool IsInitialized { get; private set; }
+
         /// <summary>The set of playable videos changed.</summary>
         public event EventHandler<PoolChangedEventArgs>? PoolChanged;
 
@@ -59,6 +65,9 @@ namespace YouTubeVideoPlayer.Playlists
 
         /// <summary>The playable videos or their order changed (see <see cref="IVideoSource.SequenceChanged"/>).</summary>
         public event EventHandler? SequenceChanged;
+
+        /// <summary>The automatic swap was switched or changed, or its interval started over (the playlist changed).</summary>
+        public event EventHandler? AutoSwapChanged;
 
         /// <summary>
         /// Loads the library, then the selected playlist (from cache, or downloaded if there is none).
@@ -85,6 +94,8 @@ namespace YouTubeVideoPlayer.Playlists
 
             var selected = FindByUrl(_library.SelectedPlaylistUrl);
             SelectedKey = selected?.Key;
+            CheckSwapStart();
+            AutoSwapChanged?.Invoke(this, EventArgs.Empty);
 
             if (selected != null)
             {
@@ -101,6 +112,7 @@ namespace YouTubeVideoPlayer.Playlists
             }
 
             RebuildPool(selectionChanged: false);
+            IsInitialized = true;
             LoadRemainingInBackgroundAsync().FireAndForget("Loading playlists in the background failed.");
         }
 
@@ -219,11 +231,160 @@ namespace YouTubeVideoPlayer.Playlists
 
         public bool Contains(string playlistKey) => Find(playlistKey) != null;
 
+        /// <summary>Whether a video is one of those the player picks from now.</summary>
+        public bool IsInPool(string videoId) => _pool.Contains(videoId);
+
+        #region Automatic swap
+
+        /// <summary>The automatic swap is turned on (it only acts while <see cref="CanAutoSwap"/> is <c>true</c>).</summary>
+        public bool AutoSwapEnabled => _library.AutoSwap.Enabled;
+
+        /// <summary>How long each playlist plays before the next one takes over.</summary>
+        public TimeSpan AutoSwapInterval => TimeSpan.FromHours(_library.AutoSwap.IntervalHours);
+
+        /// <summary>When the playlist or the swap setting last changed; the interval counts from there.</summary>
+        public DateTimeOffset? LastSwapUtc => _library.AutoSwap.LastSwapUtc;
+
+        /// <summary>The automatic swap needs a playlist to swap to, so it can only be turned on with two playlists or more.</summary>
+        public bool CanAutoSwap => _playlists.Count >= 2;
+
+        /// <summary>When the next automatic swap is due; <c>null</c> while it is off.</summary>
+        public DateTimeOffset? NextSwapUtc =>
+            AutoSwapEnabled && CanAutoSwap ? (LastSwapUtc ?? _time.GetUtcNow()) + AutoSwapInterval : null;
+
+        /// <summary>The automatic swap is due and waits for the right moment (near the end of the current video).</summary>
+        public bool IsSwapDue => NextSwapUtc is { } due && _time.GetUtcNow() >= due;
+
+        /// <summary>
+        /// Turns the automatic swap on or off and sets its interval. Every change starts the interval over. If saving
+        /// fails, the old setting is kept.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">Turning it on with fewer than two playlists.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The interval is shorter than an hour or longer than the dialog can show.</exception>
+        public void SetAutoSwap(bool enabled, TimeSpan interval)
+        {
+            if (enabled && !CanAutoSwap)
+                throw new InvalidOperationException("Swapping playlists automatically needs at least two playlists.");
+
+            var hours = (int)Math.Round(interval.TotalHours);
+            if (hours < AutoSwapSettings.MinIntervalHours || hours > AutoSwapSettings.MaxIntervalHours)
+                throw new ArgumentOutOfRangeException(nameof(interval), "The interval must be between one hour and 365 days.");
+
+            var settings = _library.AutoSwap;
+            if (settings.Enabled == enabled && settings.IntervalHours == hours)
+                return;
+
+            var (previousEnabled, previousHours, previousSwap) = (settings.Enabled, settings.IntervalHours, settings.LastSwapUtc);
+            settings.Enabled = enabled;
+            settings.IntervalHours = hours;
+            settings.LastSwapUtc = _time.GetUtcNow();
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                (settings.Enabled, settings.IntervalHours, settings.LastSwapUtc) = (previousEnabled, previousHours, previousSwap);
+                throw;
+            }
+
+            Logger.Log(enabled
+                ? $"Automatic playlist swap on: every {FormatInterval(AutoSwapInterval)}, the next one at {NextSwapUtc:u}."
+                : $"Automatic playlist swap off (interval {FormatInterval(AutoSwapInterval)}).");
+            AutoSwapChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// The playlist that comes next: the one after the selected playlist in the list, starting over after the last one
+        /// (after "All playlists" the first one). Playlists that could not be loaded, and those without videos, are skipped.
+        /// <c>null</c> if no other playlist can be played.
+        /// </summary>
+        public PlaylistInfo? GetNextPlaylist()
+        {
+            var start = SelectedKey == null ? -1 : _playlists.FindIndex(p => p.Key == SelectedKey);
+            for (var step = 1; step <= _playlists.Count; step++)
+            {
+                var playlist = _playlists[(start + step + _playlists.Count) % _playlists.Count];
+                if (playlist.Key != SelectedKey && IsPlayable(playlist))
+                    return playlist;
+            }
+
+            return null;
+        }
+
+        /// <summary>Loaded with videos, or still to be loaded (a failed playlist and an empty one are not).</summary>
+        private static bool IsPlayable(PlaylistInfo playlist) => playlist.HasValidId && playlist.State switch
+        {
+            PlaylistLoadState.Loaded => playlist.VideoIds.Count > 0,
+            PlaylistLoadState.Failed => false,
+            _ => true
+        };
+
+        /// <summary>
+        /// Switches to <see cref="GetNextPlaylist"/>. With <paramref name="keepCurrentVideo"/> (the automatic swap) the
+        /// current video plays to its end and only the videos after it come from the next playlist; otherwise it is
+        /// skipped, as with any other switch. Returns the playlist that is selected now, or <c>null</c> if there is none.
+        /// </summary>
+        public async Task<PlaylistInfo?> SwitchToNextAsync(bool keepCurrentVideo)
+        {
+            var next = GetNextPlaylist();
+            if (next == null)
+                return null;
+
+            await SelectAsync(next.Key, keepCurrentVideo);
+            return next;
+        }
+
+        public string? NextPlaylistTitle => GetNextPlaylist()?.Title;
+
+        async Task<string?> IPlaylistSwitch.SwitchToNextPlaylistAsync() =>
+            (await SwitchToNextAsync(keepCurrentVideo: false))?.Title;
+
+        /// <summary>
+        /// A file without a start of the interval (written by hand), or with one in the future (the clock was turned back),
+        /// would delay the swap for an unknown time: the interval starts now.
+        /// </summary>
+        private void CheckSwapStart()
+        {
+            var settings = _library.AutoSwap;
+            var now = _time.GetUtcNow();
+            if (!settings.Enabled || (settings.LastSwapUtc is { } last && last <= now))
+                return;
+
+            settings.LastSwapUtc = now;
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                // Logged by Save; the start is kept in memory and saved with the next change.
+            }
+        }
+
+        internal static string FormatInterval(TimeSpan interval)
+        {
+            var days = (int)interval.TotalDays;
+            var hours = interval.Hours;
+            var parts = new List<string>();
+            if (days > 0)
+                parts.Add(days == 1 ? "1 day" : $"{days} days");
+            if (hours > 0 || days == 0)
+                parts.Add(hours == 1 ? "1 hour" : $"{hours} hours");
+            return string.Join(" ", parts);
+        }
+
+        #endregion
+
         /// <summary>
         /// Switches playback to a playlist (or to all playlists when <paramref name="playlistKey"/> is <c>null</c>).
         /// Waits for the playlist if it is still loading. If it cannot be loaded, the previous selection is kept.
+        /// A change of the selection starts the interval of the automatic swap over.
         /// </summary>
-        public async Task SelectAsync(string? playlistKey)
+        /// <param name="keepCurrentVideo">
+        /// The current video plays to its end instead of being skipped (see <see cref="PoolChangedEventArgs.KeepCurrentVideo"/>).
+        /// </param>
+        public async Task SelectAsync(string? playlistKey, bool keepCurrentVideo = false)
         {
             PlaylistInfo? playlist = null;
             if (playlistKey != null)
@@ -237,8 +398,12 @@ namespace YouTubeVideoPlayer.Playlists
             }
 
             // Saved first: if that fails, the selection stays as it was.
+            var changed = playlist?.Key != SelectedKey;
             var previousUrl = _library.SelectedPlaylistUrl;
+            var previousSwap = _library.AutoSwap.LastSwapUtc;
             _library.SelectedPlaylistUrl = playlist?.Url;
+            if (changed)
+                _library.AutoSwap.LastSwapUtc = _time.GetUtcNow();
             try
             {
                 Save();
@@ -246,11 +411,14 @@ namespace YouTubeVideoPlayer.Playlists
             catch
             {
                 _library.SelectedPlaylistUrl = previousUrl;
+                _library.AutoSwap.LastSwapUtc = previousSwap;
                 throw;
             }
 
             SelectedKey = playlist?.Key;
-            RebuildPool(selectionChanged: true);
+            RebuildPool(selectionChanged: true, keepCurrentVideo);
+            if (changed)
+                AutoSwapChanged?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>Looks up a playlist link on YouTube (used to pre-fill the name when adding a playlist).</summary>
@@ -326,10 +494,23 @@ namespace YouTubeVideoPlayer.Playlists
             // Saved first: if that fails, the playlist stays in the list and keeps its cache.
             var wasSelected = SelectedKey == playlist.Key;
             var previousUrl = _library.SelectedPlaylistUrl;
+            var swap = _library.AutoSwap;
+            var (previousSwapEnabled, previousSwap) = (swap.Enabled, swap.LastSwapUtc);
             var index = _library.Playlists.IndexOf(playlist.Entry);
             _library.Playlists.Remove(playlist.Entry);
             if (wasSelected)
+            {
                 _library.SelectedPlaylistUrl = null;
+                swap.LastSwapUtc = _time.GetUtcNow(); // the playlist changed
+            }
+
+            // With a single playlist left there is nothing to swap to.
+            var swapTurnedOff = swap.Enabled && _library.Playlists.Count < 2;
+            if (swapTurnedOff)
+            {
+                swap.Enabled = false;
+                swap.LastSwapUtc = _time.GetUtcNow();
+            }
 
             try
             {
@@ -341,6 +522,7 @@ namespace YouTubeVideoPlayer.Playlists
                     _library.Playlists.Insert(index, playlist.Entry);
 
                 _library.SelectedPlaylistUrl = previousUrl;
+                (swap.Enabled, swap.LastSwapUtc) = (previousSwapEnabled, previousSwap);
                 throw;
             }
 
@@ -349,10 +531,16 @@ namespace YouTubeVideoPlayer.Playlists
             if (wasSelected)
                 SelectedKey = null;
 
+            if (swapTurnedOff)
+                Logger.Log("Automatic playlist swap disabled: fewer than two playlists are left.");
+
             PlaylistsChanged?.Invoke(this, EventArgs.Empty);
 
             if (wasSelected || SelectedKey == null)
                 RebuildPool(selectionChanged: wasSelected);
+
+            // Also when nothing about the swap changed: without the removed playlist another one may come next.
+            AutoSwapChanged?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>
@@ -561,7 +749,7 @@ namespace YouTubeVideoPlayer.Playlists
             };
         }
 
-        private void RebuildPool(bool selectionChanged)
+        private void RebuildPool(bool selectionChanged, bool keepCurrentVideo = false)
         {
             IEnumerable<PlaylistInfo> sources = SelectedKey == null
                 ? _playlists
@@ -583,7 +771,7 @@ namespace YouTubeVideoPlayer.Playlists
             if (sequenceChanged)
                 SequenceChanged?.Invoke(this, EventArgs.Empty);
 
-            PoolChanged?.Invoke(this, new PoolChangedEventArgs(selectionChanged));
+            PoolChanged?.Invoke(this, new PoolChangedEventArgs(selectionChanged, selectionChanged && keepCurrentVideo));
         }
 
         private void Save()
