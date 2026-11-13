@@ -23,7 +23,7 @@ public class PlaylistCommandTests
     private static IPlaylistSwitch Switch(string? next)
     {
         var playlistSwitch = Substitute.For<IPlaylistSwitch>();
-        playlistSwitch.NextPlaylistTitle.Returns(next);
+        playlistSwitch.HasOtherPlaylist.Returns(next != null);
         playlistSwitch.SwitchToNextPlaylistAsync().Returns(next);
         return playlistSwitch;
     }
@@ -118,6 +118,98 @@ public class PlaylistCommandTests
         await Async.SettleAsync();
 
         await playlistSwitch.Received(3).SwitchToNextPlaylistAsync();
+    });
+
+    [Fact]
+    public void Metadata_PlaylistShuffleStatusIsForEverybody_TheToggleOnlyForModeratorsBroadcasterAndPrivilegedUsers()
+    {
+        IChatCommand[] commands =
+        {
+            new PlaylistShuffleStatusCommand(Switch("Beta"), TimeSpan.FromSeconds(3)),
+            new TogglePlaylistShuffleCommand(Switch("Beta"), TimeSpan.FromSeconds(3))
+        };
+
+        Assert.Equal(new[] { "playlistshufflestatus", "toggleplaylistshuffle" }, commands.Select(c => c.Name));
+        Assert.False(commands[0].RequiresModerator);
+        Assert.True(commands[1].RequiresModerator);
+        Assert.All(commands, c => Assert.Equal(TimeSpan.FromSeconds(3), c.Cooldown));
+    }
+
+    [Theory]
+    [InlineData(true, "Playlist shuffle is ON: the next playlist is picked at random.")]
+    [InlineData(false, "Playlist shuffle is OFF: the playlists take turns in the order of the list.")]
+    public async Task PlaylistShuffleStatus_SaysHowTheNextPlaylistIsChosen(bool random, string expected)
+    {
+        var playlistSwitch = Switch("Beta");
+        playlistSwitch.RandomOrder.Returns(random);
+
+        var reply = await new PlaylistShuffleStatusCommand(playlistSwitch, TimeSpan.Zero).ExecuteAsync(Chat.Command("!playlistshufflestatus"));
+
+        Assert.Equal(expected, reply);
+        playlistSwitch.DidNotReceive().ToggleRandomOrder();
+    }
+
+    [Theory]
+    [InlineData(true, "Playlist shuffle is now ON: the next playlist is picked at random.")]
+    [InlineData(false, "Playlist shuffle is now OFF: the playlists take turns in the order of the list.")]
+    public async Task TogglePlaylistShuffle_SwitchesIt_AndPostsTheNewValue(bool after, string expected)
+    {
+        var playlistSwitch = Switch("Beta");
+        playlistSwitch.ToggleRandomOrder().Returns(after);
+
+        var reply = await new TogglePlaylistShuffleCommand(playlistSwitch, TimeSpan.Zero).ExecuteAsync(Chat.Command("!toggleplaylistshuffle", moderator: true));
+
+        playlistSwitch.Received(1).ToggleRandomOrder();
+        Assert.Equal(expected, reply);
+    }
+
+    [Fact]
+    public async Task TogglePlaylistShuffle_WhenSavingFails_SaysSo()
+    {
+        var playlistSwitch = Switch("Beta");
+        playlistSwitch.ToggleRandomOrder().Throws(new IOException("disk full"));
+
+        var reply = await new TogglePlaylistShuffleCommand(playlistSwitch, TimeSpan.Zero).ExecuteAsync(Chat.Command("!toggleplaylistshuffle", moderator: true));
+
+        Assert.Equal("The playlist order could not be changed.", reply);
+    }
+
+    [Fact]
+    public void OnlyPrivilegedUsersCanTogglePlaylistShuffle_ThroughTheCommandManager() => UiContext.Run(async () =>
+    {
+        var chat = Chat.Channel(out var sent);
+        var playlistSwitch = Switch("Beta");
+        using var manager = new ChatCommandManager(
+            chat,
+            new IChatCommand[] { new PlaylistShuffleStatusCommand(playlistSwitch, TimeSpan.Zero), new TogglePlaylistShuffleCommand(playlistSwitch, TimeSpan.Zero) },
+            new[] { "friend" },
+            new FakeTimeProvider());
+
+        chat.Say("!toggleplaylistshuffle", user: "viewer");
+        chat.Say("!playlistshufflestatus", user: "viewer");
+        await Async.SettleAsync();
+        playlistSwitch.DidNotReceive().ToggleRandomOrder();
+        Assert.Single(sent);
+
+        chat.Say("!toggleplaylistshuffle", user: "friend");
+        await Async.SettleAsync();
+        playlistSwitch.Received(1).ToggleRandomOrder();
+    });
+
+    [Fact]
+    public void TogglePlaylistShuffle_WithTheRealPlaylists_IsSaved() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup()
+            .WithPlaylist(IdA, "Alpha", selected: true).WithCache(IdA, "a1")
+            .WithPlaylist(IdB, "Beta").WithCache(IdB, "b1");
+        var playlists = setup.Create();
+        await playlists.InitializeAsync();
+
+        var reply = await new TogglePlaylistShuffleCommand(playlists, TimeSpan.Zero).ExecuteAsync(Chat.Command("!toggleplaylistshuffle", moderator: true));
+
+        Assert.Equal("Playlist shuffle is now ON: the next playlist is picked at random.", reply);
+        Assert.True(playlists.RandomSwapOrder);
+        Assert.True(setup.SavedLibrary().AutoSwap.RandomOrder);
     });
 
     [Fact]

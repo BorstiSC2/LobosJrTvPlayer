@@ -37,6 +37,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly Button _updateButton;
         private readonly Button _updateAllButton;
         private readonly ToggleSwitch _autoSwapSwitch;
+        private readonly ToggleSwitch _randomSwapSwitch;
         private readonly NumericUpDown _swapDays;
         private readonly NumericUpDown _swapHours;
         private readonly Label _swapInfoLabel;
@@ -58,8 +59,8 @@ namespace YouTubeVideoPlayer.UI
             // Estimated once (about 7 px per character at 100 %), not measured at runtime: all five columns plus
             // the button column fit without resizing the window (columns 815 + scroll bar 20 + buttons 162 + margins 48).
             // The height leaves room for the automatic swap below the list.
-            Size = new Size(1060, 530);
-            MinimumSize = new Size(600, 380);
+            Size = new Size(1060, 560);
+            MinimumSize = new Size(600, 410);
             KeyPreview = true;
             BackColor = SurfaceColor;
             if (AppIcon.Instance is { } icon)
@@ -130,9 +131,12 @@ namespace YouTubeVideoPlayer.UI
             _statusLabel.FontChanged += (_, __) => UpdateStatusHeight();
 
             // The automatic swap, below the list (the button column stays to the right of both):
-            // [switch] Swap playlists automatically every [7] days [0] hours, and a line that says when and to which playlist.
+            // [switch] Swap playlists automatically every [7] days [0] hours
+            // [switch] Pick the next playlist at random
+            // and a line that says when and to which playlist.
             _autoSwapSwitch = new ToggleSwitch
             {
+                Name = "autoSwap",
                 Text = "Swap playlists automatically every",
                 Anchor = AnchorStyles.Left, // centered in the row of the flow panel
                 Margin = new Padding(0, 0, 6, 0)
@@ -148,6 +152,14 @@ namespace YouTubeVideoPlayer.UI
                 Margin = Padding.Empty
             };
             swapRow.Controls.AddRange(new Control[] { _autoSwapSwitch, _swapDays, NewInlineLabel("days"), _swapHours, NewInlineLabel("hours") });
+
+            // Also what !skipplaylist goes by, so it is not tied to the automatic swap being on.
+            _randomSwapSwitch = new ToggleSwitch
+            {
+                Name = "randomSwap",
+                Text = "Pick the next playlist at random",
+                Margin = new Padding(0, 6, 0, 0)
+            };
 
             _swapInfoLabel = new Label
             {
@@ -166,6 +178,7 @@ namespace YouTubeVideoPlayer.UI
                 Padding = new Padding(0, 10, 0, 0)
             };
             swapPanel.Controls.Add(swapRow);
+            swapPanel.Controls.Add(_randomSwapSwitch);
             swapPanel.Controls.Add(_swapInfoLabel);
             // A long line wraps instead of being cut off.
             swapPanel.SizeChanged += (_, __) => _swapInfoLabel.MaximumSize = new Size(Math.Max(100, swapPanel.ClientSize.Width), 0);
@@ -184,6 +197,7 @@ namespace YouTubeVideoPlayer.UI
             _autoSwapSwitch.CheckedChanged += (_, __) => ApplyAutoSwap();
             _swapDays.ValueChanged += (_, __) => ApplyAutoSwap();
             _swapHours.ValueChanged += (_, __) => ApplyAutoSwap();
+            _randomSwapSwitch.CheckedChanged += (_, __) => ApplyRandomSwap();
             // No double-click handler on purpose: the ListView itself toggles the check box ("random order")
             // on a double-click, and playing a playlist is what the highlighted button and Enter are for.
             KeyDown += OnKeyDown;
@@ -586,7 +600,24 @@ namespace YouTubeVideoPlayer.UI
             }
         }
 
-        /// <summary>Shows the saved setting; the switch can only be turned on with two playlists or more.</summary>
+        /// <summary>The random switch was clicked: save it (it does not start the interval over).</summary>
+        private void ApplyRandomSwap()
+        {
+            if (_updatingSwap || IsDisposed)
+                return;
+
+            try
+            {
+                _playlists.SetRandomSwapOrder(_randomSwapSwitch.Checked);
+            }
+            catch (Exception ex)
+            {
+                UpdateAutoSwapControls();
+                ReportError(ex);
+            }
+        }
+
+        /// <summary>Shows the saved setting; the switches can only be used with two playlists or more.</summary>
         private void UpdateAutoSwapControls()
         {
             _updatingSwap = true;
@@ -596,9 +627,12 @@ namespace YouTubeVideoPlayer.UI
                 _autoSwapSwitch.Enabled = available;
                 _swapDays.Enabled = available;
                 _swapHours.Enabled = available;
+                _randomSwapSwitch.Enabled = available;
 
                 if (_autoSwapSwitch.Checked != _playlists.AutoSwapEnabled)
                     _autoSwapSwitch.Checked = _playlists.AutoSwapEnabled;
+                if (_randomSwapSwitch.Checked != _playlists.RandomSwapOrder)
+                    _randomSwapSwitch.Checked = _playlists.RandomSwapOrder;
 
                 // Only set when different, so a number that is being typed is not replaced by a refresh.
                 var interval = _playlists.AutoSwapInterval;
@@ -628,16 +662,18 @@ namespace YouTubeVideoPlayer.UI
             if (!_playlists.AutoSwapEnabled)
                 return ("Off: the playlist only changes when you switch it.", false);
 
-            var next = _playlists.GetNextPlaylist();
-            if (next == null)
+            // A random pick is only made at the swap; until then the line can only say that it will be one.
+            var candidates = _playlists.GetSwapCandidates();
+            if (candidates.Count == 0)
                 return ("No other playlist can be played right now, so the playlist is not swapped.", true);
 
+            var next = _playlists.RandomSwapOrder && candidates.Count > 1 ? "a random playlist" : $"\"{candidates[0].Title}\"";
             var since = _playlists.LastSwapUtc is { } last ? $" (counted from the last change, {last.LocalDateTime:g})" : string.Empty;
             if (_playlists.IsSwapDue)
-                return ($"Swap due: \"{next.Title}\" follows the current video{since}.", false);
+                return ($"Swap due: {next} follows the current video{since}.", false);
 
             var due = _playlists.NextSwapUtc!.Value.LocalDateTime;
-            return ($"Next: \"{next.Title}\" on {due:g}, after the video that is playing then{since}.", false);
+            return ($"Next: {next} on {due:g}, after the video that is playing then{since}.", false);
         }
 
         #endregion

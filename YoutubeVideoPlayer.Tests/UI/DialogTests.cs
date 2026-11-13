@@ -70,8 +70,9 @@ public class PlaylistDialogTests
         using var dialog = new PlaylistDialog(manager).ShowHidden();
 
         Assert.True(List(dialog).CheckBoxes);
-        // No separate check box for the order any more; the only one outside the grid is the automatic swap.
-        Assert.IsType<ToggleSwitch>(Assert.Single(dialog.All<CheckBox>()));
+        // No separate check box for the order any more; outside the grid there are only the switches of the automatic swap.
+        Assert.All(dialog.All<CheckBox>(), box => Assert.IsType<ToggleSwitch>(box));
+        Assert.Equal(2, dialog.All<CheckBox>().Count());
         Assert.All(List(dialog).Items.Cast<ListViewItem>(), item => Assert.True(item.Checked)); // all random by default
     }, sta: true);
 
@@ -590,7 +591,9 @@ public class PlaylistDialogTests
 
     #region Automatic swap
 
-    private static ToggleSwitch SwapSwitch(Form dialog) => dialog.All<ToggleSwitch>().Single();
+    private static ToggleSwitch SwapSwitch(Form dialog) => dialog.All<ToggleSwitch>().Single(s => s.Name == "autoSwap");
+
+    private static ToggleSwitch RandomSwitch(Form dialog) => dialog.All<ToggleSwitch>().Single(s => s.Name == "randomSwap");
 
     // The row reads "[switch] Swap playlists automatically every [days] days [hours] hours".
     private static NumericUpDown Days(Form dialog) => dialog.All<NumericUpDown>().ElementAt(0);
@@ -720,6 +723,71 @@ public class PlaylistDialogTests
             Assert.False(manager.AutoSwapEnabled);
             Assert.False(SwapSwitch(dialog).Checked);
             Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+        }
+        finally
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+    }, sta: true);
+
+    [Fact]
+    public void TheRandomSwitch_IsBelowTheSwapSwitch_SavesTheRandomOrder_AndTheLineSaysSo() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists()
+            .WithPlaylist(IdD, "Delta").WithCache(IdD, "d1")); // two playlists to pick from (the unreachable one is skipped)
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        Assert.True(ScreenBounds(RandomSwitch(dialog)).Top >= ScreenBounds(SwapSwitch(dialog)).Bottom);
+        Assert.Equal("Pick the next playlist at random", RandomSwitch(dialog).Text);
+        Assert.False(RandomSwitch(dialog).Checked);
+        SwapSwitch(dialog).Checked = true;
+        Assert.StartsWith("Next: \"Beta\"", SwapInfo(dialog));
+        var startOfInterval = manager.LastSwapUtc;
+
+        RandomSwitch(dialog).Checked = true;
+
+        Assert.True(manager.RandomSwapOrder);
+        Assert.True(setup.SavedLibrary().AutoSwap.RandomOrder);
+        Assert.Equal(startOfInterval, manager.LastSwapUtc);
+        Assert.StartsWith("Next: a random playlist on ", SwapInfo(dialog));
+
+        manager.Remove(IdD); // only Beta is left to pick from: it is named again
+        Assert.StartsWith("Next: \"Beta\"", SwapInfo(dialog));
+    }, sta: true);
+
+    [Fact]
+    public void TheRandomSwitch_FollowsChangesFromElsewhere_AndNeedsTwoPlaylists() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        Assert.True(RandomSwitch(dialog).Enabled);
+
+        manager.SetRandomSwapOrder(true); // e.g. !toggleplaylistshuffle in the chat
+        Assert.True(RandomSwitch(dialog).Checked);
+
+        manager.Remove(IdC);
+        manager.Remove(IdB);
+        Assert.False(RandomSwitch(dialog).Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void WhenSavingTheRandomOrderFails_TheSwitchShowsTheSavedValueAgain() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var file = Path.Combine(setup.Folder, "playlists.json");
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+        string? message = null;
+        Ui.AnswerNextMessageBox(DialogResult.OK, text => message = text);
+        try
+        {
+            RandomSwitch(dialog).Checked = true;
+            await Async.WaitUntilAsync(() => message != null);
+
+            Assert.False(manager.RandomSwapOrder);
+            Assert.False(RandomSwitch(dialog).Checked);
         }
         finally
         {

@@ -30,7 +30,15 @@ namespace YouTubeVideoPlayer
             _playlists.PoolChanged += OnPoolChanged;
             _playlists.PlaylistsChanged += OnPlaylistsChanged;
             _playback.NoVideosAvailable += OnPlaybackRanOutOfVideos;
+
+            // An ordered playlist remembers where it is, so it continues there when it plays again.
+            _playback.NowPlayingChanged += OnVideoStarted;
+            _playback.VideoFinished += OnVideoFinished;
         }
+
+        private void OnVideoStarted(object? sender, NowPlaying video) => _playlists.RecordVideoStarted(video.VideoId);
+
+        private void OnVideoFinished(object? sender, NowPlaying video) => _playlists.RecordVideoFinished(video.VideoId);
 
         /// <summary>There is nothing to play and no playlist is loading anymore.</summary>
         public event EventHandler? NoVideosAvailable;
@@ -113,6 +121,8 @@ namespace YouTubeVideoPlayer
             _playlists.PoolChanged -= OnPoolChanged;
             _playlists.PlaylistsChanged -= OnPlaylistsChanged;
             _playback.NoVideosAvailable -= OnPlaybackRanOutOfVideos;
+            _playback.NowPlayingChanged -= OnVideoStarted;
+            _playback.VideoFinished -= OnVideoFinished;
         }
     }
 }

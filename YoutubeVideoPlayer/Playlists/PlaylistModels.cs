@@ -15,6 +15,21 @@ namespace YouTubeVideoPlayer.Playlists
         /// Entries without this value (older <c>playlists.json</c> files) are shuffled, as before.
         /// </summary>
         public bool Shuffle { get; set; } = true;
+
+        /// <summary>
+        /// The video that played last while this playlist played in order, so that it continues there when it plays again
+        /// (after another playlist, or after a restart). <c>null</c> until a video of it has played in order.
+        /// </summary>
+        public string? LastVideoId { get; set; }
+
+        /// <summary>The position of <see cref="LastVideoId"/> in the playlist, for when an update removed that video.</summary>
+        public int LastVideoIndex { get; set; }
+
+        /// <summary>
+        /// <see cref="LastVideoId"/> played to its end, so the playlist continues with the video after it. Otherwise it was
+        /// cut off (another playlist was selected, the app was closed) and plays again from its start.
+        /// </summary>
+        public bool LastVideoFinished { get; set; }
     }
 
     /// <summary>The content of <c>playlists.json</c>.</summary>
@@ -46,6 +61,12 @@ namespace YouTubeVideoPlayer.Playlists
 
         /// <summary>How long each playlist plays before the next one takes over.</summary>
         public int IntervalHours { get; set; } = DefaultIntervalHours;
+
+        /// <summary>
+        /// The next playlist (of the automatic swap and of <c>!skipplaylist</c>) is a random other one instead of the next
+        /// one in the list. Changing it does not start the interval over: it does not change when the swap happens.
+        /// </summary>
+        public bool RandomOrder { get; set; }
 
         /// <summary>
         /// When the interval started: the last change of the playlist (an automatic swap, or one by hand) or of this

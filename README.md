@@ -8,7 +8,8 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 
 - Playback from YouTube playlists, per playlist in random order or one video after the other
 - Playlist dialog to add, rename, remove, update and switch playlists
-- Automatic playlist swap: after a set number of days and hours the next playlist takes over, at the end of the video that is playing then
+- Automatic playlist swap: after a set number of days and hours the next playlist (in list order, or a random one) takes over, at the end of the video that is playing then
+- Playlists that play in order continue where they left off – after another playlist and after a restart
 - Cached video lists per playlist – instant switching, YouTube is only contacted when needed
 - Streams directly from YouTube
 - Automatic selection of the best video and audio stream (up to 1440p, no HDR, easy-to-decode codecs first; for videos with several audio languages the English track is played, not an automatically dubbed translation)
@@ -20,7 +21,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!skip`, `!playlist`, `!skipplaylist` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- Twitch chat bot with `!current`, `!timestamp`, `!skip`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
 
 ---
 
@@ -53,6 +54,7 @@ Click **Playlists** in the control bar to open the playlist dialog.
 | Select several rows (Shift+click, Ctrl+click) | Only Remove, Update, Update all and Close stay enabled; Remove and Update then apply to all selected playlists |
 | Random order (checkbox in the list; a double-click on a row toggles it too, it does not open the playlist) | Switches the playlist between random order and playlist order; saved with the playlist |
 | Swap playlists automatically every *n* days *n* hours (switch below the list) | Turns the automatic playlist swap on or off and sets its interval (see below). Needs at least two playlists |
+| Pick the next playlist at random (switch below it) | The next playlist (of the automatic swap and of `!skipplaylist`) is a random other one instead of the next one in the list |
 
 Links to a single video that contain `&list=...` are accepted as well.
 
@@ -72,9 +74,10 @@ Example `playlists.json`:
   "selectedPlaylistUrl": "https://www.youtube.com/playlist?list=PL...",
   "playlists": [
     { "title": "Music", "url": "https://www.youtube.com/playlist?list=PL...", "shuffle": true },
-    { "title": "Lets Play", "url": "https://www.youtube.com/playlist?list=PL...", "shuffle": false }
+    { "title": "Lets Play", "url": "https://www.youtube.com/playlist?list=PL...", "shuffle": false,
+      "lastVideoId": "<video id>", "lastVideoIndex": 11, "lastVideoFinished": true }
   ],
-  "autoSwap": { "enabled": true, "intervalHours": 168, "lastSwapUtc": "2026-11-13T18:00:00+00:00" }
+  "autoSwap": { "enabled": true, "intervalHours": 168, "randomOrder": false, "lastSwapUtc": "2026-11-13T18:00:00+00:00" }
 }
 ```
 
@@ -82,11 +85,11 @@ Example `playlists.json`:
 
 ### Automatic playlist swap
 
-Below the list in the **Playlists** dialog, the switch **Swap playlists automatically every [7] days [0] hours** lets the playlists take turns: when the interval is up, the next playlist of the list takes over (after the last one the first; after **All playlists** the first one). Playlists that could not be loaded are skipped, and **All playlists** is never swapped to. The line below the switch says when the next swap is due and which playlist comes next.
+Below the list in the **Playlists** dialog, the switch **Swap playlists automatically every [7] days [0] hours** lets the playlists take turns: when the interval is up, the next playlist of the list takes over (after the last one the first; after **All playlists** the first one). With **Pick the next playlist at random** it is a random other playlist instead (never the one that is playing). Playlists that could not be loaded are skipped, and **All playlists** is never swapped to. The line below the switches says when the next swap is due and which playlist comes next ("a random playlist" if there is more than one to pick from).
 
 - The video that is playing when the time is up is **not interrupted**. About 5½ minutes before it ends, the next playlist is selected, so the video after it comes from the next playlist – and so do the options of an **Autovote**, which starts 5 minutes before the end. A video that is shorter than that is followed by the next playlist straight away. While a vote about the next video runs or its winner is waiting, the swap waits for the end of the winner's video.
 - While the app is paused before the first **Play**, the next playlist takes over at once and its first video is prepared.
-- The interval counts from the **last change**: an automatic swap, a switch by hand (**Switch to playlist**, `!skipplaylist`), or a change of the setting (turning it on or off, another interval). The setting and the time of the last change are saved in `playlists.json`, so a restart does not reset the interval; a swap that fell due while the app was closed happens right after the next start.
+- The interval counts from the **last change**: an automatic swap, a switch by hand (**Switch to playlist**, `!skipplaylist`), or a change of the setting (turning it on or off, another interval). Switching the random order does not start it over, since it does not change when the swap happens; chat can ask for it with `!playlistshufflestatus` and moderators can switch it with `!toggleplaylistshuffle`. The setting and the time of the last change are saved in `playlists.json`, so a restart does not reset the interval; a swap that fell due while the app was closed happens right after the next start.
 - It needs at least two playlists; removing playlists until only one is left turns it off.
 - When the first video of the new playlist starts and the Twitch bot is connected, the bot posts `New Playlist has begun: <name>` – after an automatic swap as well as after a switch by hand or `!skipplaylist`.
 
@@ -95,7 +98,7 @@ Below the list in the **Playlists** dialog, the switch **Swap playlists automati
 Every playlist has its own order, saved as `shuffle` in `playlists.json` (playlists without the value are shuffled, as before):
 
 - **Random order** (default): the next video is picked at random, never the one that just ended.
-- **In order**: the videos play one after the other as in the YouTube playlist, and start over after the last one. Playback starts with the first video, **Next** and `!skip` only go to the next video, and so does the end of a video.
+- **In order**: the videos play one after the other as in the YouTube playlist, and start over after the last one. **Next** and `!skip` only go to the next video, and so does the end of a video. The playlist **continues where it left off** when it plays again – after another playlist, or after a restart of the app: with the video after the one that last played to its end, or, if that video was cut off (another playlist was selected, the app was closed), with the same video again from its start. The first time, it starts with the first video. Where it is, is saved with the playlist in `playlists.json`; if an update removed that video, the playlist continues at the same position.
 
 Change it in the **Playlists** dialog (the **Random order** column of the list has a checkbox for each playlist: checked = random, unchecked = in order) or with the chat commands `!shufflestatus` / `!toggleshuffle`. **All playlists** combined always plays in random order, because there is no common order.
 
@@ -123,6 +126,8 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
 | `!playlist` | everyone | Replies `Current playlist: "<name>" (shuffled)` or `(in playlist order)` |
 | `!skipplaylist` | privileged | Switches to the next playlist now (the current video is skipped); the bot then announces `New Playlist has begun: <name>` |
+| `!playlistshufflestatus` | everyone | Tells whether the next playlist is picked at random or the playlists take turns in the order of the list |
+| `!toggleplaylistshuffle` | privileged | Switches between a random next playlist and the order of the list (like the switch in the playlist dialog) and posts the new value |
 | `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes before a video ends) |
 | `!toggleautovote` | privileged | Switches Autovote on or off (like the checkbox in the control bar, which follows) and posts the new value |
 | `!vodcommands` | everyone | Lists the commands everyone may use. Built from the registered commands, so new commands appear automatically |
@@ -134,7 +139,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 

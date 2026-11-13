@@ -68,7 +68,7 @@ namespace YouTubeVideoPlayer.Playback
             _player = player;
             _time = timeProvider ?? TimeProvider.System;
 
-            _player.EndReached += (_, __) => PostFromPlayer(() => AdvanceAutomatically("PlayNextAsync after EndReached failed."));
+            _player.EndReached += (_, __) => PostFromPlayer(OnEndReached);
             _player.Buffering += (_, cache) => PostFromPlayer(() => OnBuffering(cache));
             _player.Playing += (_, __) => PostFromPlayer(OnPlaying);
             _player.EncounteredError += (_, __) => PostFromPlayer(OnEncounteredError);
@@ -128,6 +128,12 @@ namespace YouTubeVideoPlayer.Playback
 
         /// <summary>The metadata of the new video is known and playback is starting.</summary>
         public event EventHandler<NowPlaying>? NowPlayingChanged;
+
+        /// <summary>
+        /// The current video played to its end (the player reported the end; not a skip, an error or the watchdog).
+        /// Raised before the next video is started.
+        /// </summary>
+        public event EventHandler<NowPlaying>? VideoFinished;
 
         /// <summary><c>true</c> while the player is buffering, <c>false</c> once it is done.</summary>
         public event EventHandler<bool>? BufferingChanged;
@@ -645,6 +651,14 @@ namespace YouTubeVideoPlayer.Playback
             _player.Volume = _volume;
             _player.Mute = _isMuted;
             StopBufferingWatch();
+        }
+
+        private void OnEndReached()
+        {
+            if (Current is { } finished)
+                VideoFinished?.Invoke(this, finished);
+
+            AdvanceAutomatically("PlayNextAsync after EndReached failed.");
         }
 
         private void OnEncounteredError()

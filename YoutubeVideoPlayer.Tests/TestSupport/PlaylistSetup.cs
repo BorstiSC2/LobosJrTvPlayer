@@ -15,6 +15,7 @@ public sealed class PlaylistSetup : IDisposable
     public const string IdA = "PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     public const string IdB = "PLbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     public const string IdC = "PLcccccccccccccccccccccccccccccccc";
+    public const string IdD = "PLdddddddddddddddddddddddddddddddd";
 
     private readonly TempDirectory _dir = new();
 

@@ -312,7 +312,7 @@ public class AutoSwapSettingsTests
 
         manager.Remove(IdC);
         Assert.Null(manager.GetNextPlaylist());
-        Assert.Null(((IPlaylistSwitch)manager).NextPlaylistTitle);
+        Assert.False(((IPlaylistSwitch)manager).HasOtherPlaylist);
     });
 
     [Fact]
@@ -350,6 +350,76 @@ public class AutoSwapSettingsTests
 
         Assert.Null(await ((IPlaylistSwitch)manager).SwitchToNextPlaylistAsync());
         Assert.Equal(IdA, manager.SelectedKey);
+    });
+
+    [Fact]
+    public void TheRandomOrder_IsOffByDefault_IsSaved_AndDoesNotStartTheIntervalOver() => UiContext.Run(async () =>
+    {
+        using var setup = ThreePlaylists();
+        var time = new FakeTimeProvider(Start);
+        var manager = await LoadAsync(setup, time);
+        manager.SetAutoSwap(true, TimeSpan.FromDays(7));
+        Assert.False(manager.RandomSwapOrder);
+        var changes = 0;
+        manager.AutoSwapChanged += (_, _) => changes++;
+
+        time.Advance(TimeSpan.FromDays(2));
+        manager.SetRandomSwapOrder(true);
+
+        Assert.True(manager.RandomSwapOrder);
+        Assert.Equal(1, changes);
+        Assert.Equal(Start, manager.LastSwapUtc); // it does not change when the swap happens
+        Assert.True(setup.SavedLibrary().AutoSwap.RandomOrder);
+        Assert.True((await LoadAsync(setup.Reopen(time))).RandomSwapOrder);
+
+        manager.SetRandomSwapOrder(true); // no change
+        Assert.Equal(1, changes);
+    });
+
+    [Fact]
+    public void WithTheRandomOrder_TheNextPlaylistIsAnyOtherOne_NeverTheOneThatPlays() => UiContext.Run(async () =>
+    {
+        using var setup = ThreePlaylists().WithPlaylist(IdD, "Delta").WithCache(IdD, "d1");
+        var manager = await LoadAsync(setup, new FakeTimeProvider(Start));
+        manager.SetRandomSwapOrder(true);
+
+        var picks = Enumerable.Range(0, 200).Select(_ => manager.GetNextPlaylist()!.Title).ToHashSet();
+
+        Assert.Equal(new HashSet<string> { "Beta", "Gamma", "Delta" }, picks);
+        Assert.Equal(new[] { "Beta", "Gamma", "Delta" }, manager.GetSwapCandidates().Select(p => p.Title)); // in list order
+    });
+
+    [Fact]
+    public void WithTheRandomOrder_ASwitchGoesToARandomOtherPlaylist() => UiContext.Run(async () =>
+    {
+        using var setup = ThreePlaylists();
+        var manager = await LoadAsync(setup, new FakeTimeProvider(Start));
+        var playlistSwitch = (IPlaylistSwitch)manager;
+
+        Assert.True(playlistSwitch.ToggleRandomOrder());
+        Assert.True(playlistSwitch.RandomOrder);
+        var titles = new HashSet<string>();
+        for (var i = 0; i < 40; i++)
+        {
+            var before = manager.SelectedKey;
+            titles.Add((await playlistSwitch.SwitchToNextPlaylistAsync())!);
+            Assert.NotEqual(before, manager.SelectedKey);
+        }
+
+        Assert.Equal(3, titles.Count);
+        Assert.False(playlistSwitch.ToggleRandomOrder());
+    });
+
+    [Fact]
+    public void WhenSavingTheRandomOrderFails_TheOldValueStays() => UiContext.Run(async () =>
+    {
+        using var setup = TwoPlaylists();
+        var manager = await LoadAsync(setup, new FakeTimeProvider(Start));
+
+        using (new UnwritableLibrary(setup))
+            Assert.ThrowsAny<UnauthorizedAccessException>(() => manager.SetRandomSwapOrder(true));
+
+        Assert.False(manager.RandomSwapOrder);
     });
 
     [Theory]

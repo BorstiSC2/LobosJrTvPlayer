@@ -140,9 +140,10 @@ namespace YouTubeVideoPlayer.Playlists
             int index;
             if (!IsShuffled)
             {
-                // The next one in playlist order; after the last video the playlist starts over. Without a
-                // (known) current video the index is -1, so it starts at the first video.
-                index = (currentIndex + 1) % _pool.Count;
+                // The next one in playlist order; after the last video the playlist starts over. Without a current
+                // video of this playlist (it was just selected again, or the app has just started) it continues where
+                // it left off.
+                index = currentIndex >= 0 ? (currentIndex + 1) % _pool.Count : ResumeIndex();
             }
             else if (currentIndex < 0 || _pool.Count == 1)
             {
@@ -176,13 +177,15 @@ namespace YouTubeVideoPlayer.Playlists
                 return copy.Take(take).ToList();
             }
 
-            // The episodes that follow the current one; after the last one the playlist starts over, so the
-            // list is only shorter than `count` if the playlist has fewer videos.
+            // The episodes that follow the current one (or, without a current video of this playlist, those from where it
+            // left off); after the last one the playlist starts over, so the list is only shorter than `count` if the
+            // playlist has fewer videos.
             var currentIndex = IndexOfVideo(currentVideoId);
+            var first = currentIndex >= 0 ? currentIndex + 1 : ResumeIndex();
             var next = new List<string>();
-            for (var step = 1; step <= _pool.Count && next.Count < count; step++)
+            for (var step = 0; step < _pool.Count && next.Count < count; step++)
             {
-                var id = _pool[(currentIndex + step) % _pool.Count];
+                var id = _pool[(first + step) % _pool.Count];
                 if (id != currentVideoId)
                     next.Add(id);
             }
@@ -192,6 +195,105 @@ namespace YouTubeVideoPlayer.Playlists
 
         /// <summary>Position of a video in the current pool, or -1 if there is no such video.</summary>
         private int IndexOfVideo(string? videoId) => videoId == null ? -1 : _pool.IndexOf(videoId);
+
+        #region Where an ordered playlist continues
+
+        // The playlist and the video that started last, as long as it belongs to the selected playlist. After an
+        // automatic swap it still names the previous playlist, whose last video plays to its end.
+        private string? _playingKey;
+        private string? _playingVideoId;
+
+        /// <summary>
+        /// Where the selected playlist (in order) continues when the video before is not one of its own: after the video
+        /// that last played to its end, or at the one that was cut off, again from its start. The first video if
+        /// nothing of it has played yet.
+        /// </summary>
+        private int ResumeIndex()
+        {
+            var entry = SelectedKey == null ? null : Find(SelectedKey)?.Entry;
+            if (entry?.LastVideoId is not { } last || _pool.Count == 0)
+                return 0;
+
+            var index = _pool.IndexOf(last);
+            if (index < 0)
+            {
+                // An update removed the video: what took its place comes next.
+                return entry.LastVideoIndex >= 0 && entry.LastVideoIndex < _pool.Count ? entry.LastVideoIndex : 0;
+            }
+
+            return entry.LastVideoFinished ? (index + 1) % _pool.Count : index;
+        }
+
+        /// <summary>
+        /// A video started playing (reported by <see cref="AppCoordinator"/>). If it is one of the selected playlist and
+        /// that plays in order, the playlist continues there the next time it plays: with this video again if it is cut
+        /// off, with the next one once it has played to its end (<see cref="RecordVideoFinished"/>).
+        /// </summary>
+        public void RecordVideoStarted(string videoId)
+        {
+            var playlist = SelectedKey == null ? null : Find(SelectedKey);
+            var index = playlist == null ? -1 : IndexOf(playlist.VideoIds, videoId);
+            if (playlist == null || index < 0)
+            {
+                _playingKey = null;
+                _playingVideoId = null;
+                return;
+            }
+
+            _playingKey = playlist.Key;
+            _playingVideoId = videoId;
+            if (playlist.Shuffle)
+                return;
+
+            var entry = playlist.Entry;
+            entry.LastVideoId = videoId;
+            entry.LastVideoIndex = index;
+            entry.LastVideoFinished = false;
+            TrySaveProgress();
+        }
+
+        /// <summary>The video played to its end (not skipped or cut off), so its playlist continues with the next one.</summary>
+        public void RecordVideoFinished(string videoId)
+        {
+            if (_playingVideoId != videoId || _playingKey == null || Find(_playingKey) is not { } playlist)
+                return;
+
+            var entry = playlist.Entry;
+            if (entry.LastVideoId != videoId || entry.LastVideoFinished)
+                return;
+
+            entry.LastVideoFinished = true;
+            TrySaveProgress();
+        }
+
+        /// <summary>
+        /// Progress is saved with every video, but only as a convenience: if <c>playlists.json</c> cannot be written now
+        /// (logged by <see cref="Save"/>), it stays in memory and goes out with the next save.
+        /// </summary>
+        private void TrySaveProgress()
+        {
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                // Logged by Save; the progress is written with the next save.
+            }
+        }
+
+        private static int IndexOf(IReadOnlyList<string> ids, string id)
+        {
+            for (var i = 0; i < ids.Count; i++)
+            {
+                if (ids[i] == id)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        #endregion
 
         /// <summary>Sets and saves whether a playlist plays in random order. If saving fails, the old value is kept.</summary>
         public void SetShuffle(string playlistKey, bool shuffle)
@@ -295,21 +397,65 @@ namespace YouTubeVideoPlayer.Playlists
         }
 
         /// <summary>
-        /// The playlist that comes next: the one after the selected playlist in the list, starting over after the last one
-        /// (after "All playlists" the first one). Playlists that could not be loaded, and those without videos, are skipped.
-        /// <c>null</c> if no other playlist can be played.
+        /// The next playlist is a random other one instead of the next one in the list (for the automatic swap and
+        /// <c>!skipplaylist</c>).
         /// </summary>
-        public PlaylistInfo? GetNextPlaylist()
+        public bool RandomSwapOrder => _library.AutoSwap.RandomOrder;
+
+        /// <summary>
+        /// Sets and saves <see cref="RandomSwapOrder"/>. It does not start the interval over (it does not change when the
+        /// swap happens). If saving fails, the old value is kept.
+        /// </summary>
+        public void SetRandomSwapOrder(bool random)
         {
+            var settings = _library.AutoSwap;
+            if (settings.RandomOrder == random)
+                return;
+
+            settings.RandomOrder = random;
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                settings.RandomOrder = !random;
+                throw;
+            }
+
+            Logger.Log(random ? "The next playlist is picked at random." : "The playlists take turns in the order of the list.");
+            AutoSwapChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// The playlists a swap can go to, in list order from the one after the selected playlist (after "All playlists"
+        /// from the first one): every other playlist except those that could not be loaded and those without videos.
+        /// </summary>
+        public IReadOnlyList<PlaylistInfo> GetSwapCandidates()
+        {
+            var candidates = new List<PlaylistInfo>();
             var start = SelectedKey == null ? -1 : _playlists.FindIndex(p => p.Key == SelectedKey);
             for (var step = 1; step <= _playlists.Count; step++)
             {
                 var playlist = _playlists[(start + step + _playlists.Count) % _playlists.Count];
                 if (playlist.Key != SelectedKey && IsPlayable(playlist))
-                    return playlist;
+                    candidates.Add(playlist);
             }
 
-            return null;
+            return candidates;
+        }
+
+        /// <summary>
+        /// The playlist that comes next: the first of <see cref="GetSwapCandidates"/> (the next one in the list), or a
+        /// random one of them with <see cref="RandomSwapOrder"/>. <c>null</c> if no other playlist can be played.
+        /// </summary>
+        public PlaylistInfo? GetNextPlaylist()
+        {
+            var candidates = GetSwapCandidates();
+            if (candidates.Count == 0)
+                return null;
+
+            return RandomSwapOrder ? candidates[_random.Next(candidates.Count)] : candidates[0];
         }
 
         /// <summary>Loaded with videos, or still to be loaded (a failed playlist and an empty one are not).</summary>
@@ -335,7 +481,15 @@ namespace YouTubeVideoPlayer.Playlists
             return next;
         }
 
-        public string? NextPlaylistTitle => GetNextPlaylist()?.Title;
+        bool IPlaylistSwitch.HasOtherPlaylist => GetSwapCandidates().Count > 0;
+
+        bool IPlaylistSwitch.RandomOrder => RandomSwapOrder;
+
+        bool IPlaylistSwitch.ToggleRandomOrder()
+        {
+            SetRandomSwapOrder(!RandomSwapOrder);
+            return RandomSwapOrder;
+        }
 
         async Task<string?> IPlaylistSwitch.SwitchToNextPlaylistAsync() =>
             (await SwitchToNextAsync(keepCurrentVideo: false))?.Title;
