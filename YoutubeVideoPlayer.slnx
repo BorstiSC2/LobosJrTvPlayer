@@ -6,6 +6,9 @@
   <Folder Name="/Projektmappenelemente/">
     <File Path="README.md" />
   </Folder>
+  <Project Path="YoutubeVideoPlayer.Tests/YoutubeVideoPlayer.Tests.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
   <Project Path="YoutubeVideoPlayer/YoutubeVideoPlayer.csproj">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
