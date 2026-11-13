@@ -390,6 +390,27 @@ public class AutoSwapSettingsTests
     });
 
     [Fact]
+    public void WithTheRandomOrder_AllPlaylistsCombined_IsNeverPicked_AlsoWhenItIsWhatPlays() => UiContext.Run(async () =>
+    {
+        using var setup = ThreePlaylists();
+        var manager = await LoadAsync(setup, new FakeTimeProvider(Start));
+        manager.SetRandomSwapOrder(true);
+        await manager.SelectAsync(null); // "All playlists"
+
+        var picks = Enumerable.Range(0, 200).Select(_ => manager.GetNextPlaylist()).ToList();
+
+        Assert.All(picks, pick => Assert.NotNull(pick));
+        Assert.Equal(new HashSet<string> { "Alpha", "Beta", "Gamma" }, picks.Select(p => p!.Title).ToHashSet());
+
+        // Switching again and again never lands on "All playlists" (SelectedKey null).
+        for (var i = 0; i < 40; i++)
+        {
+            await ((IPlaylistSwitch)manager).SwitchToNextPlaylistAsync();
+            Assert.NotNull(manager.SelectedKey);
+        }
+    });
+
+    [Fact]
     public void WithTheRandomOrder_ASwitchGoesToARandomOtherPlaylist() => UiContext.Run(async () =>
     {
         using var setup = ThreePlaylists();
