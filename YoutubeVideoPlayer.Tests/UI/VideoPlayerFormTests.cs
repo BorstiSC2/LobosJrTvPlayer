@@ -88,13 +88,17 @@ public class VideoPlayerFormTests
 
         public Label VolumeLabel => Form.All<Label>().Single(l => l.Size == new Size(100, 40));
 
-        public Label BufferingLabel => Form.All<Label>().Single(l => l.Font.Size == 14);
+        public Label BufferingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 150);
+
+        public Label WaitingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 480);
 
         public Label TwitchLabel => Form.All<Label>().Single(l => l.Dock == DockStyle.Fill);
 
         public TrackBar Slider => Form.All<TrackBar>().Single();
 
         public Button MuteButton => Form.All<Button>().Single(b => b.Width == 40);
+
+        public int PlayedVideoCount() => Player.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IMediaPlayer.Play));
 
         /// <summary>Presses the Play button and waits until the video has started.</summary>
         public async Task PressPlayAsync()
@@ -318,6 +322,36 @@ public class VideoPlayerFormTests
         app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 100f);
         await Async.SettleAsync();
         Assert.False(app.BufferingLabel.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void WhileTheNextVideoWaitsForAVote_ALabelCountsDownTheTimeLeft() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        var hold = app.Playback.HoldNextVideo();
+        hold.Until = app.Time.GetUtcNow() + TimeSpan.FromMinutes(2);
+
+        app.Player.EndReached += Raise.Event();
+        await Async.WaitUntilAsync(() => app.Playback.IsWaitingForHold);
+
+        Assert.True(app.WaitingLabel.Visible);
+        Assert.Equal("Waiting for vote to finish... 2:00", app.WaitingLabel.Text);
+        Assert.False(app.TitleLabel.Visible); // the finished video's title is gone with its picture
+        Assert.False(app.Form.Button("Play").Enabled);
+
+        app.Time.Advance(TimeSpan.FromSeconds(65));
+        await Async.WaitUntilAsync(() => app.WaitingLabel.Text == "Waiting for vote to finish... 0:55",
+            because: "the label is updated every second");
+
+        hold.Release();
+        await Async.SettleAsync();
+        app.Time.Advance(PlaybackManager.DelayBeforeNextVideo); // in case the next video was not prepared
+        await Async.WaitUntilAsync(() => app.PlayedVideoCount() == 2);
+
+        Assert.False(app.WaitingLabel.Visible);
+        Assert.True(app.Form.Button("Pause").Enabled);
     }, sta: true);
 
     [Fact]

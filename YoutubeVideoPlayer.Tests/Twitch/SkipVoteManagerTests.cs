@@ -710,6 +710,88 @@ public class SkipVoteManagerTests
     });
 
     #endregion
+
+    #region Holding the next video
+
+    [Fact]
+    public void AHeldVote_HoldsTheNextVideoBeforeTheOptionsAreLookedUp_AndKnowsWhenItEnds() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var hold = Substitute.For<IPlaybackHold>();
+        setup.Playback.HoldNextVideo().Returns(hold);
+        var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
+        setup.YouTube.GetVideoAsync("a", Arg.Any<CancellationToken>()).Returns(lookup.Task);
+
+        var start = setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), holdNextVideo: true);
+        await Async.SettleAsync();
+        setup.Playback.Received(1).HoldNextVideo(); // a short video may end during the lookup
+        Assert.Null(hold.Until);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(3)); // the lookup takes 3 s
+        lookup.SetResult(new YouTubeVideoDetails("Title a", null));
+        Assert.Null(await start);
+        var optionsKnown = setup.Time.GetUtcNow();
+        Assert.Equal(optionsKnown + SkipVoteManager.AnnouncementDuration + TimeSpan.FromMinutes(2), hold.Until);
+
+        await setup.FinishAsync();
+        Assert.Equal("a", setup.QueuedVideo());
+        hold.Received(1).Release();
+    });
+
+    [Fact]
+    public void Cancelling_AHeldVote_ReleasesTheHold() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var hold = Substitute.For<IPlaybackHold>();
+        setup.Playback.HoldNextVideo().Returns(hold);
+        await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), holdNextVideo: true);
+
+        setup.Manager.Cancel(Chat.Command("!cancelvote", user: "mod"));
+        await setup.FinishAsync();
+
+        hold.Received(1).Release();
+        Assert.Null(setup.QueuedVideo());
+    });
+
+    [Fact]
+    public void AHeldVoteThatCannotStart_ReleasesTheHold() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(pool: new[] { "only-one" });
+        var hold = Substitute.For<IPlaybackHold>();
+        setup.Playback.HoldNextVideo().Returns(hold);
+
+        var reply = await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), holdNextVideo: true);
+
+        Assert.Equal("There are not enough videos available for a vote.", reply);
+        hold.Received(1).Release();
+    });
+
+    [Fact]
+    public void Dispose_DoesNotReleaseTheHold_SoNothingStartsWhileTheAppCloses() => UiContext.Run(async () =>
+    {
+        var setup = new Setup();
+        var hold = Substitute.For<IPlaybackHold>();
+        setup.Playback.HoldNextVideo().Returns(hold);
+        await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), holdNextVideo: true);
+
+        setup.Dispose();
+        await setup.FinishAsync();
+
+        hold.DidNotReceive().Release();
+    });
+
+    [Fact]
+    public void ARegularVote_DoesNotHoldTheNextVideo() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+
+        await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2));
+        await setup.StartAsync();
+
+        setup.Playback.DidNotReceive().HoldNextVideo();
+    });
+
+    #endregion
 }
 
 public class VoteCommandTests

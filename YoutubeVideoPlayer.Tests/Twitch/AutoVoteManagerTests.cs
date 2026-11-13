@@ -26,6 +26,7 @@ public class AutoVoteManagerTests
             Playback.IsPlaying.Returns(true);
             Playback.Length.Returns(_ => Length);
             Playback.Position.Returns(_ => Position);
+            Playback.HoldNextVideo().Returns(Hold);
 
             Videos.GetNextVideoIds(Arg.Any<int>(), Arg.Any<string?>())
                 .Returns(call => new[] { "a", "b", "c", "d", "e", "f" }.Take(call.ArgAt<int>(0)).ToList());
@@ -55,6 +56,19 @@ public class AutoVoteManagerTests
         public List<string> Sent { get; }
 
         public IPlaybackControl Playback { get; } = Substitute.For<IPlaybackControl>();
+
+        /// <summary>What <see cref="IPlaybackControl.HoldNextVideo"/> hands out.</summary>
+        public IPlaybackHold Hold { get; } = Substitute.For<IPlaybackHold>();
+
+        /// <summary>Moves the clock one second at a time (like a real clock) until the vote is over.</summary>
+        public async Task RunVoteToTheEndAsync(int maxSeconds = 300)
+        {
+            for (var i = 0; i < maxSeconds && (Votes.IsRunning || QueuedVideo() == null); i++)
+            {
+                Time.Advance(TimeSpan.FromSeconds(1));
+                await Async.SettleAsync();
+            }
+        }
 
         public IVideoSource Videos { get; } = Substitute.For<IVideoSource>();
 
@@ -217,67 +231,111 @@ public class AutoVoteManagerTests
     [Fact]
     public void TheVoteIsShortenedSoItEndsBeforeTheVideoDoes() => UiContext.Run(async () =>
     {
-        using var setup = new Setup();
-        setup.Remaining(TimeSpan.FromSeconds(60));
+        using var setup = new Setup(voteDuration: TimeSpan.FromMinutes(5));
+        setup.Remaining(TimeSpan.FromMinutes(3));
 
         setup.AutoVote.Enabled = true;
         await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
 
-        // 60 s left - 6 s of announcements - 10 s safety margin
-        Assert.Contains("Voting ends 44 seconds after the last option.", setup.Sent[0]);
+        // 180 s left - 6 s of announcements - 10 s safety margin; the next video does not have to wait.
+        Assert.Contains("Voting ends 164 seconds after the last option.", setup.Sent[0]);
+        Assert.DoesNotContain("next video starts when", setup.Sent[0]);
+        setup.Playback.DidNotReceive().HoldNextVideo();
     });
 
     [Fact]
-    public void ATooShortRemainder_GetsNoVote_AndIsNotRetried() => UiContext.Run(async () =>
+    public void AShortVideo_GetsATwoMinuteVote_AndTheNextVideoWaitsUntilTheWinnerIsQueued() => UiContext.Run(async () =>
     {
-        using var setup = new Setup();
-        setup.Remaining(TimeSpan.FromSeconds(25)); // 25 - 16 = 9 s: below the minimum vote of 15 s
+        using var setup = new Setup(voteDuration: TimeSpan.FromMinutes(3));
+        setup.Remaining(TimeSpan.FromSeconds(60)); // e.g. a one-minute video that just started
 
         setup.AutoVote.Enabled = true;
-        await setup.TickAsync();
-        await setup.TickAsync();
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
 
-        Assert.False(setup.Votes.IsRunning);
-        Assert.Empty(setup.Sent);
+        setup.Playback.Received(1).HoldNextVideo();
+        Assert.Contains("Voting ends 2 minutes after the last option. The next video starts when voting has ended.", setup.Sent[0]);
+
+        // The end of the hold is known once the options are: 3 messages 2 s apart, then two minutes.
+        var start = setup.Time.GetUtcNow();
+        Assert.Equal(start + TimeSpan.FromSeconds(6) + TimeSpan.FromMinutes(2), setup.Hold.Until);
+
+        setup.Votes.Vote(Chat.Command("!vote 3", user: "anna"));
+        await setup.RunVoteToTheEndAsync();
+
+        Assert.Equal("c", setup.QueuedVideo());
+        Received.InOrder(() =>
+        {
+            setup.Playback.QueueNextVideo("c");
+            setup.Hold.Release();
+        });
+        setup.Hold.Received(1).Release();
+        Assert.Equal(TimeSpan.FromSeconds(126), setup.Time.GetUtcNow() - start);
+    });
+
+    [Fact]
+    public void AShortVideo_WithAShorterConfiguredVote_KeepsThatLength() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(voteDuration: TimeSpan.FromSeconds(30));
+        setup.Remaining(TimeSpan.FromSeconds(25)); // 25 - 16 = 9 s: no room for the 30 s vote
+
+        setup.AutoVote.Enabled = true;
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
+
+        setup.Playback.Received(1).HoldNextVideo();
+        Assert.Contains("Voting ends 30 seconds after the last option.", setup.Sent[0]);
+
+        await setup.TickAsync();
+        setup.Playback.Received(1).HoldNextVideo(); // one vote per video
+    });
+
+    [Fact]
+    public void AVideoWithEnoughTimeLeftForTheWholeVote_IsNotHeld() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(voteDuration: TimeSpan.FromSeconds(30));
+        setup.Remaining(TimeSpan.FromSeconds(50)); // 50 - 16 = 34 s: the 30 s vote fits
+
+        setup.AutoVote.Enabled = true;
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
+
+        Assert.Contains("Voting ends 30 seconds after the last option.", setup.Sent[0]);
+        setup.Playback.DidNotReceive().HoldNextVideo();
     });
 
     [Fact]
     public void SlowOptionLookups_ComeOutOfTheCountdown_SoTheVoteStillEndsBeforeTheVideoDoes() => UiContext.Run(async () =>
     {
-        using var setup = new Setup { LookupDelay = TimeSpan.FromSeconds(8) };
-        setup.Remaining(TimeSpan.FromSeconds(60));
+        using var setup = new Setup(voteDuration: TimeSpan.FromMinutes(5)) { LookupDelay = TimeSpan.FromSeconds(8) };
+        setup.Remaining(TimeSpan.FromMinutes(3));
         var start = setup.Time.GetUtcNow();
 
         setup.AutoVote.Enabled = true;
-        for (var i = 0; i < 80 && setup.QueuedVideo() == null; i++)
-        {
-            setup.Time.Advance(TimeSpan.FromSeconds(1));
-            await Async.SettleAsync();
-        }
+        await setup.RunVoteToTheEndAsync();
 
-        // The video ends after 60 s and the vote has to be over 10 s before that. Without the lookup time taken
-        // out of the countdown the winner is only known after 8 + 6 + 44 = 58 s.
+        // The video ends after 180 s and the vote has to be over 10 s before that. Without the lookup time taken
+        // out of the countdown the winner is only known after 8 + 6 + 164 = 178 s. (The lookups finish on the thread
+        // pool, so they may be noticed a few fake seconds late.)
         Assert.NotNull(setup.QueuedVideo());
-        Assert.True(setup.Time.GetUtcNow() - start <= TimeSpan.FromSeconds(55), "the vote ended too late");
+        Assert.True(setup.Time.GetUtcNow() - start <= TimeSpan.FromSeconds(175), "the vote ended too late");
     });
 
     [Fact]
     public void IfTheLookupTakesTooLong_NoVoteStartsAtAll() => UiContext.Run(async () =>
     {
-        using var setup = new Setup { LookupDelay = TimeSpan.FromSeconds(15) };
-        setup.Remaining(TimeSpan.FromSeconds(40)); // fine at first: 40 - 16 = 24 s
+        using var setup = new Setup(voteDuration: TimeSpan.FromMinutes(5)) { LookupDelay = TimeSpan.FromSeconds(160) };
+        setup.Remaining(TimeSpan.FromMinutes(3)); // fine at first: 180 - 16 = 164 s
 
         setup.AutoVote.Enabled = true;
-        for (var i = 0; i < 25; i++)
+        for (var i = 0; i < 170; i++)
         {
             setup.Time.Advance(TimeSpan.FromSeconds(1));
             await Async.SettleAsync();
         }
 
-        // 15 s are gone before the options are known: too little is left for a vote of at least 15 s.
+        // 160 s are gone before the options are known: too little is left for a vote of at least 15 s.
         Assert.False(setup.Votes.IsRunning);
         Assert.Empty(setup.Sent);
         Assert.Null(setup.QueuedVideo());
+        setup.Playback.DidNotReceive().HoldNextVideo();
     });
 
     [Fact]

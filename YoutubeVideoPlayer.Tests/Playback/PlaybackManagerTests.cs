@@ -891,6 +891,137 @@ public class PlaybackManagerTests
 
     #endregion
 
+    #region Holding the next video (a vote that lasts longer than the video)
+
+    [Fact]
+    public void Hold_TheEndOfTheVideo_StopsThePlayer_AndTheNextVideoWaitsUntilTheHoldIsReleased() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        var changes = 0;
+        setup.Manager.StateChanged += (_, _) => changes++;
+
+        var hold = setup.Manager.HoldNextVideo();
+        Assert.Null(setup.Manager.HoldRemaining); // nothing waits yet
+        hold.Until = setup.Time.GetUtcNow() + TimeSpan.FromMinutes(2);
+
+        setup.Player.EndReached += Raise.Event();
+        await setup.AdvanceAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(setup.Manager.IsWaitingForHold);
+        Assert.False(setup.Manager.IsPaused);
+        setup.Player.Received(1).Stop(); // a black picture
+        Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos());
+        Assert.Equal(TimeSpan.FromSeconds(90), setup.Manager.HoldRemaining);
+        Assert.Equal(1, changes);
+
+        setup.Manager.Pause(); // nothing to pause
+        setup.Player.DidNotReceive().Pause();
+
+        hold.Release();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.False(setup.Manager.IsWaitingForHold);
+        Assert.Null(setup.Manager.HoldRemaining);
+        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+        Assert.Equal(2, changes);
+
+        hold.Release(); // only once
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        Assert.Equal(2, setup.PlayedVideos().Count);
+    });
+
+    [Fact]
+    public void Hold_ReleasedBeforeTheVideoEnds_ChangesNothing() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Manager.HoldNextVideo().Release();
+        setup.Player.EndReached += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.False(setup.Manager.IsWaitingForHold);
+        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void Hold_ASkipWhileWaiting_PlaysTheNextVideoAtOnce_AndTheLateReleaseDoesNothing() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        var noVideos = false;
+        setup.Manager.NoVideosAvailable += (_, _) => noVideos = true;
+        var hold = setup.Manager.HoldNextVideo();
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync();
+        Assert.True(setup.Manager.IsWaitingForHold);
+
+        await setup.RunAsync(setup.Manager.SkipAsync);
+        Assert.False(setup.Manager.IsWaitingForHold);
+        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+
+        hold.Release(); // the vote ends later: v2 keeps playing
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(2, setup.PlayedVideos().Count);
+        Assert.False(noVideos);
+    });
+
+    [Fact]
+    public void Hold_OnlyHoldsTheEndOfTheVideoThatPlayedWhenItWasTaken() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2", "v3");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        setup.Manager.HoldNextVideo();
+
+        await setup.RunAsync(setup.Manager.SkipAsync); // v2
+        setup.Player.EndReached += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.False(setup.Manager.IsWaitingForHold);
+        Assert.Equal(new[] { "v1.video", "v2.video", "v3.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void Hold_APlayerErrorOfTheHeldVideo_AlsoWaits() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        setup.Manager.HoldNextVideo();
+
+        setup.Player.EncounteredError += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.True(setup.Manager.IsWaitingForHold);
+        Assert.Single(setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void Hold_ThatIsNotReleasedInTime_IsIgnored_SoTheScreenDoesNotStayBlack() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        var hold = setup.Manager.HoldNextVideo();
+        hold.Until = setup.Time.GetUtcNow() + TimeSpan.FromMinutes(1);
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync();
+
+        for (var check = 0; check < 3; check++) // 60 s: the hold is due, but has some time to be released
+            await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
+        Assert.True(setup.Manager.IsWaitingForHold);
+        Assert.Equal(TimeSpan.Zero, setup.Manager.HoldRemaining);
+
+        for (var check = 0; check < 3; check++) // more than MaxHoldOverrun later
+            await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.False(setup.Manager.IsWaitingForHold);
+        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+    });
+
+    #endregion
+
     #region Fail-safe watchdog
 
     [Fact]

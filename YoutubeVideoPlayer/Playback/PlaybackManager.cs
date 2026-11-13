@@ -24,6 +24,15 @@ namespace YouTubeVideoPlayer.Playback
 
         public static readonly TimeSpan DelayBeforeNextVideo = TimeSpan.FromSeconds(1);
 
+        /// <summary>
+        /// A hold that is not released this long after its <see cref="IPlaybackHold.Until"/> is ignored, so a
+        /// forgotten hold cannot keep the screen black.
+        /// </summary>
+        public static readonly TimeSpan MaxHoldOverrun = TimeSpan.FromSeconds(30);
+
+        /// <summary>The longest wait for a hold whose end is not known.</summary>
+        public static readonly TimeSpan MaxHoldWait = TimeSpan.FromMinutes(5);
+
         private readonly SynchronizationContext _context;
         private readonly IYouTubeService _youtube;
         private readonly IVideoSource _videoSource;
@@ -36,6 +45,9 @@ namespace YouTubeVideoPlayer.Playback
         private CancellationTokenSource? _playNextCancellationTokenSource;
         private Task? _playNextTask;
         private string? _queuedVideoId;
+        private PlaybackHold? _hold;
+        private bool _isWaitingForHold;
+        private DateTimeOffset _waitingSince;
         private bool _failSafeTriggered;
         private long _failSafePlaybackTime = long.MinValue;
         private int _mediaGeneration;
@@ -56,7 +68,7 @@ namespace YouTubeVideoPlayer.Playback
             _player = player;
             _time = timeProvider ?? TimeProvider.System;
 
-            _player.EndReached += (_, __) => PostFromPlayer(() => PlayNextAsync().FireAndForget("PlayNextAsync after EndReached failed."));
+            _player.EndReached += (_, __) => PostFromPlayer(() => AdvanceAutomatically("PlayNextAsync after EndReached failed."));
             _player.Buffering += (_, cache) => PostFromPlayer(() => OnBuffering(cache));
             _player.Playing += (_, __) => PostFromPlayer(OnPlaying);
             _player.EncounteredError += (_, __) => PostFromPlayer(OnEncounteredError);
@@ -144,7 +156,29 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         public bool IsStandbyReady => _standbyReady;
 
-        /// <summary>Raised when <see cref="IsStandby"/>, <see cref="IsStandbyReady"/> or <see cref="IsPaused"/> changed.</summary>
+        /// <summary>
+        /// Whether the current video has ended and the next one waits for a hold (<see cref="HoldNextVideo"/>), e.g. a
+        /// chat vote that runs longer than the video. The player is stopped meanwhile, so the picture is black.
+        /// </summary>
+        public bool IsWaitingForHold => _isWaitingForHold;
+
+        /// <summary>While waiting for a hold: how much longer it is expected to last; <c>null</c> if that is not known (or nothing waits).</summary>
+        public TimeSpan? HoldRemaining
+        {
+            get
+            {
+                if (!_isWaitingForHold || _hold?.Until is not { } until)
+                    return null;
+
+                var remaining = until - _time.GetUtcNow();
+                return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+            }
+        }
+
+        /// <summary>
+        /// Raised when <see cref="IsStandby"/>, <see cref="IsStandbyReady"/>, <see cref="IsPaused"/> or
+        /// <see cref="IsWaitingForHold"/> changed.
+        /// </summary>
         public event EventHandler? StateChanged;
 
         /// <summary>
@@ -209,7 +243,7 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         public void Pause()
         {
-            if (_disposed || _isPaused || Current == null)
+            if (_disposed || _isPaused || _isWaitingForHold || Current == null)
                 return;
 
             StopBufferingWatch();
@@ -253,13 +287,24 @@ namespace YouTubeVideoPlayer.Playback
         /// one after the current video in playlist order. A previous call that is still resolving
         /// streams is cancelled first, so overlapping triggers cannot race each other.
         /// </summary>
-        public Task PlayNextAsync() => RunPlaybackOperationAsync(PlayNextInternalAsync);
+        public Task PlayNextAsync()
+        {
+            // An explicit change does not wait: whatever held the next video back is over.
+            EndHold();
+            return RunPlaybackOperationAsync(PlayNextInternalAsync);
+        }
 
         /// <summary>
         /// Plays a specific video (e.g. the winner of a chat vote). The current video keeps playing until
         /// the new one is ready. If the video cannot be played, the next video is played instead.
         /// </summary>
-        public Task PlayVideoAsync(string videoId) => RunPlaybackOperationAsync(async cancellationToken =>
+        public Task PlayVideoAsync(string videoId)
+        {
+            EndHold();
+            return RunPlaybackOperationAsync(cancellationToken => PlayVideoInternalAsync(videoId, cancellationToken));
+        }
+
+        private async Task<bool> PlayVideoInternalAsync(string videoId, CancellationToken cancellationToken)
         {
             try
             {
@@ -280,7 +325,7 @@ namespace YouTubeVideoPlayer.Playback
                 Logger.Log($"Playing the requested video '{videoId}' failed; playing the next video instead.", ex);
                 return await PlayNextInternalAsync(cancellationToken);
             }
-        });
+        }
 
         /// <summary>
         /// Queues a video that plays when the current one ends (or is skipped) instead of the regular next one.
@@ -303,6 +348,89 @@ namespace YouTubeVideoPlayer.Playback
         {
             _queuedVideoId = null;
             RestartPrefetch();
+        }
+
+        /// <summary>
+        /// Keeps the next video from starting when the current one ends, until the returned hold is released. The hold
+        /// belongs to the video that plays now: an explicit skip or another video ends it, and a newer hold replaces it.
+        /// </summary>
+        public IPlaybackHold HoldNextVideo()
+        {
+            var hold = new PlaybackHold(this, Current);
+            if (!_disposed)
+            {
+                Logger.Log($"The video after \"{Current?.Title}\" waits until the hold is released.");
+                _hold = hold;
+            }
+
+            return hold;
+        }
+
+        private void ReleaseHold(PlaybackHold hold)
+        {
+            if (_disposed || !ReferenceEquals(_hold, hold))
+                return;
+
+            _hold = null;
+            if (_isWaitingForHold)
+            {
+                Logger.Log("The hold was released; playing the next video.");
+                PlayNextAsync().FireAndForget("PlayNextAsync after a released hold failed.");
+            }
+        }
+
+        /// <summary>Drops the hold and stops waiting for it.</summary>
+        private void EndHold()
+        {
+            _hold = null;
+            SetWaiting(false);
+        }
+
+        private void SetWaiting(bool waiting)
+        {
+            if (_isWaitingForHold == waiting)
+                return;
+
+            _isWaitingForHold = waiting;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Moves on after the current video ended or failed by itself: to the next video, or, if a hold for this video
+        /// is active, into the wait for it (a black screen until the hold is released).
+        /// </summary>
+        private void AdvanceAutomatically(string failureMessage)
+        {
+            if (_hold is { } hold && Current != null && ReferenceEquals(hold.Video, Current))
+            {
+                if (!_isWaitingForHold)
+                    EnterWaiting();
+                return;
+            }
+
+            PlayNextAsync().FireAndForget(failureMessage);
+        }
+
+        private void EnterWaiting()
+        {
+            Logger.Log("The video is over; waiting for the hold to be released before the next video starts.");
+            StopBufferingWatch();
+
+            // Late events of the finished video must not start the next one.
+            Interlocked.Increment(ref _mediaGeneration);
+            try
+            {
+                _player.Stop(); // a black picture instead of the last frame
+            }
+            catch (Exception ex)
+            {
+                Logger.Log("Exception occured trying to stop the video before waiting for the hold.", ex);
+            }
+
+            _waitingSince = _time.GetUtcNow();
+            _failSafeTriggered = false;
+            SetState(standby: false, paused: false);
+            SetWaiting(true);
         }
 
         private void OnSequenceChanged(object? sender, EventArgs e)
@@ -522,18 +650,31 @@ namespace YouTubeVideoPlayer.Playback
             // Stream error; skip to next video silently
             Logger.Log("The player encountered an error; skipping to the next video.");
             StopBufferingWatch();
-            PlayNextAsync().FireAndForget("PlayNextAsync after a player error failed.");
+            AdvanceAutomatically("PlayNextAsync after a player error failed.");
         }
 
         private void OnBufferingTimeout()
         {
             Logger.Log($"Buffering took longer than {BufferingTimeout.TotalSeconds:0} seconds; skipping to the next video.");
             StopBufferingWatch();
-            PlayNextAsync().FireAndForget("PlayNextAsync after buffering timeout failed.");
+            AdvanceAutomatically("PlayNextAsync after buffering timeout failed.");
         }
 
         private void OnFailSafeTick()
         {
+            // The player is stopped by design while it waits for a hold; only a hold that is never released is a problem.
+            if (_isWaitingForHold)
+            {
+                var deadline = _hold?.Until is { } until ? until + MaxHoldOverrun : _waitingSince + MaxHoldWait;
+                if (_time.GetUtcNow() > deadline)
+                {
+                    Logger.Log("The hold on the next video was not released in time; playing the next video.");
+                    PlayNextAsync().FireAndForget("PlayNextAsync after an expired hold failed.");
+                }
+
+                return;
+            }
+
             // While an operation is resolving the next video the player is idle by design, and the
             // operation has its own retry loop. Cancelling it here would only restart a slow load.
             if (_playNextTask != null || _isPaused)
@@ -560,7 +701,7 @@ namespace YouTubeVideoPlayer.Playback
                     Logger.Log("Failstate triggered player state: " + _player.State);
 
                 StopBufferingWatch();
-                PlayNextAsync().FireAndForget("PlayNextAsync after fail-safe trigger failed.");
+                AdvanceAutomatically("PlayNextAsync after fail-safe trigger failed.");
             }
 
             _failSafePlaybackTime = currentPlaybackTime;
@@ -604,6 +745,25 @@ namespace YouTubeVideoPlayer.Playback
                 if (!_disposed)
                     action();
             }, null);
+        }
+
+        /// <summary>A hold handed out by <see cref="HoldNextVideo"/>; only the newest one counts.</summary>
+        private sealed class PlaybackHold : IPlaybackHold
+        {
+            private readonly PlaybackManager _owner;
+
+            public PlaybackHold(PlaybackManager owner, NowPlaying? video)
+            {
+                _owner = owner;
+                Video = video;
+            }
+
+            /// <summary>The video whose end is held.</summary>
+            public NowPlaying? Video { get; }
+
+            public DateTimeOffset? Until { get; set; }
+
+            public void Release() => _owner.ReleaseHold(this);
         }
 
         /// <summary>Stops playback and the watchdogs. The <see cref="IMediaPlayer"/> is disposed by its owner.</summary>

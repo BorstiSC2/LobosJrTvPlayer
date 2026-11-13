@@ -104,6 +104,8 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!current` | everyone | Replies `Now playing: "<title>" – https://www.youtube.com/watch?v=<id>` |
 | `!timestamp` | everyone | Replies `"<title>" – 03:21 / 10:45 (07:24 left)` |
 | `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
+| `!pause` | privileged | Pauses the current video |
+| `!play` | privileged | Continues a paused video, or starts the first video while the player still waits for the first Play |
 | `!shufflestatus` | everyone | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
 | `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes before a video ends) |
@@ -117,7 +119,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!shufflestatus`, `!toggleshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
@@ -136,7 +138,8 @@ The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on)
 
 - The vote is about the video that plays **after** the current one. The rules message says so ("Vote for the video that plays AFTER the current one ...") and so does the result ("It plays after the current video.").
 - The winner is queued and starts when the current video ends; the current video is not interrupted. If the video is skipped before it ends, the queued winner plays next.
-- The vote is shortened if needed so that it is over (with a safety margin) before the video ends; the time it takes to look up the options counts too. Videos with too little time left, or without a known length (live streams), get no vote.
+- The vote is shortened if needed so that it is over (with a safety margin) before the video ends; the time it takes to look up the options counts too. Videos without a known length (live streams) get no vote.
+- A video too short for a 2-minute vote (or for the configured vote length, if that is shorter) still gets a vote of that length, and the next video waits for it: when the short video is over, the screen goes black with "Waiting for vote to finish... 1:23" counting down every second, and the winner starts as soon as the vote ends. The rules message says so ("The next video starts when voting has ended."). **Next** or `!skip` starts the next video at once (the winner then plays after it), and `!cancelvote` ends the wait.
 - There is one vote per video, and nothing happens while the bot is not connected to the chat or another vote is running. Switching playlists drops a queued winner.
 - Unchecking the box only prevents new votes; a vote that is already running finishes. The box starts unchecked on every start.
 

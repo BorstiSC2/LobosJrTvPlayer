@@ -87,11 +87,16 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// them takes time, and the countdown only starts after that, so it is shortened by the time that is already gone:
         /// the vote then ends by this time, not that much later. If there is too little time left, no vote starts.
         /// </param>
+        /// <param name="holdNextVideo">
+        /// The vote may last longer than the current video: the next video waits until the vote is over (the player
+        /// shows a black screen with the time left), and then the winner plays.
+        /// </param>
         /// <returns>A message if the vote could not be started, otherwise <c>null</c>.</returns>
-        public Task<string?> StartAfterCurrentAsync(TimeSpan duration, DateTimeOffset? mustEndBy = null) =>
-            StartCoreAsync("the autovote", afterCurrent: true, duration, mustEndBy);
+        public Task<string?> StartAfterCurrentAsync(TimeSpan duration, DateTimeOffset? mustEndBy = null, bool holdNextVideo = false) =>
+            StartCoreAsync("the autovote", afterCurrent: true, duration, mustEndBy, holdNextVideo);
 
-        private async Task<string?> StartCoreAsync(string startedBy, bool afterCurrent, TimeSpan duration, DateTimeOffset? mustEndBy = null)
+        private async Task<string?> StartCoreAsync(
+            string startedBy, bool afterCurrent, TimeSpan duration, DateTimeOffset? mustEndBy = null, bool holdNextVideo = false)
         {
             if (_session != null)
             {
@@ -103,6 +108,10 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             var session = new VoteSession(duration, afterCurrent, _playback.Current);
             _session = session;
             Logger.Log($"Skip vote started by {startedBy}{(afterCurrent ? " (for the video after the current one)" : string.Empty)}.");
+
+            // At once, not after the option lookup: a short video may end while the options are being looked up.
+            if (afterCurrent && holdNextVideo)
+                session.Hold = _playback.HoldNextVideo();
 
             List<VoteOption> options;
             try
@@ -143,6 +152,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             }
 
             session.Options.AddRange(options);
+            if (session.Hold != null)
+                session.Hold.Until = _time.GetUtcNow() + MessageDelay * options.Count + session.Duration;
+
             RunVoteAsync(session).FireAndForget("The skip vote failed.");
             return null;
         }
@@ -199,15 +211,20 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             // Voting is already open while the options are being posted (Vote only needs session.Options),
             // but the countdown below only starts once the last option is in the chat.
+            var waits = session.Hold != null ? " The next video starts when voting has ended." : string.Empty;
             await TrySendAsync(
                 $"{Headline(session)} Pick one of the {session.Options.Count} options below by typing its command – " +
-                $"you can change your vote at any time. Voting ends {FormatDuration(session.Duration)} after the last option.");
+                $"you can change your vote at any time. Voting ends {FormatDuration(session.Duration)} after the last option.{waits}");
 
             for (var i = 0; i < session.Options.Count; i++)
             {
                 await Task.Delay(MessageDelay, _time, token);
                 await TrySendAsync($"{i + 1}) {Shorten(session.Options[i].Title)} – vote with !vote {i + 1}");
             }
+
+            // Now the end is exact (sending may have taken longer than planned).
+            if (session.Hold != null)
+                session.Hold.Until = _time.GetUtcNow() + session.Duration;
 
             // Remind the chat halfway through longer votes.
             var reminderAt = session.Duration >= TimeSpan.FromSeconds(60) ? session.Duration / 2 : TimeSpan.Zero;
@@ -222,15 +239,25 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             if (session.Cancellation.IsCancellationRequested)
                 return;
 
-            EndSession(session);
-            var (winner, message) = DetermineWinner(session);
-            Logger.Log($"Skip vote finished: {message}");
-            await TrySendAsync(message);
+            // The hold is released only once the winner is queued, otherwise the regular next video would start.
+            var hold = session.Hold;
+            session.Hold = null;
+            try
+            {
+                EndSession(session);
+                var (winner, message) = DetermineWinner(session);
+                Logger.Log($"Skip vote finished: {message}");
+                await TrySendAsync(message);
 
-            if (session.AfterCurrent)
-                _playback.QueueNextVideo(winner.VideoId);
-            else
-                await _playback.PlayVideoAsync(winner.VideoId);
+                if (session.AfterCurrent)
+                    _playback.QueueNextVideo(winner.VideoId);
+                else
+                    await _playback.PlayVideoAsync(winner.VideoId);
+            }
+            finally
+            {
+                hold?.Release();
+            }
         }
 
         /// <summary>The first words of the rules message; they say which video the vote is about.</summary>
@@ -358,18 +385,27 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private static string Shorten(string title) =>
             title.Length <= MaxTitleLength ? title : title[..(MaxTitleLength - 1)].TrimEnd() + "…";
 
-        private void EndSession(VoteSession session)
+        /// <param name="releaseHold">
+        /// Lets a video that waits for this vote start (the vote was cancelled or failed). Not on dispose: the app is
+        /// closing, and nothing should start playing.
+        /// </param>
+        private void EndSession(VoteSession session, bool releaseHold = true)
         {
             if (ReferenceEquals(_session, session))
                 _session = null;
 
             session.Cancellation.Cancel();
+
+            var hold = session.Hold;
+            session.Hold = null;
+            if (releaseHold)
+                hold?.Release();
         }
 
         public void Dispose()
         {
             if (_session != null)
-                EndSession(_session);
+                EndSession(_session, releaseHold: false);
         }
 
         private sealed record VoteOption(string VideoId, string Title);
@@ -391,6 +427,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             /// <summary>The video that was playing when the vote started.</summary>
             public NowPlaying? CurrentAtStart { get; }
+
+            /// <summary>Keeps the next video waiting until the vote is over; <c>null</c> once released (or if there is none).</summary>
+            public IPlaybackHold? Hold { get; set; }
 
             public CancellationTokenSource Cancellation { get; } = new();
 

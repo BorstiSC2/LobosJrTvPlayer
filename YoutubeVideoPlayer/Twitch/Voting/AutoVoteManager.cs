@@ -22,8 +22,10 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     /// <para>Must be created on the UI thread; the checks run on it every <see cref="CheckInterval"/>.</para>
     /// <para>
     /// There is one vote per video. The vote is shortened so that it is over, with a safety margin,
-    /// before the video ends; a video with too little time left (or an unknown length, e.g. a live
-    /// stream) gets no vote. Nothing happens while the bot is not connected to the chat.
+    /// before the video ends. If that would leave less than <see cref="ShortVideoVoteDuration"/> (a short
+    /// video), the vote runs that long anyway and the next video waits for it: the screen stays black,
+    /// with the time left, until the winner starts. A video with an unknown length (e.g. a live stream)
+    /// gets no vote. Nothing happens while the bot is not connected to the chat.
     /// </para>
     /// </remarks>
     public sealed class AutoVoteManager : IAutoVoteControl, IDisposable
@@ -36,6 +38,12 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         /// <summary>The vote ends at least this long before the video does.</summary>
         public static readonly TimeSpan SafetyMargin = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// The shortest autovote (or the configured vote length, if that is shorter). A video too short for it gets a
+        /// vote of this length all the same, and the next video waits until the vote is over.
+        /// </summary>
+        public static readonly TimeSpan ShortVideoVoteDuration = TimeSpan.FromMinutes(2);
 
         private readonly IChatChannel _chat;
         private readonly IPlaybackControl _playback;
@@ -116,22 +124,26 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             // Posting the options takes a few seconds; the vote has to be over before the video is.
             var available = remaining - SkipVoteManager.AnnouncementDuration - SafetyMargin;
-            var duration = TimeSpan.FromSeconds(Math.Floor(Math.Min(_votes.Duration.TotalSeconds, available.TotalSeconds)));
-            if (duration < SkipVoteManager.MinimumDuration)
+            var shortest = _votes.Duration < ShortVideoVoteDuration ? _votes.Duration : ShortVideoVoteDuration;
+            if (available < shortest)
             {
-                Logger.Log($"Autovote: only {remaining:mm\\:ss} left of \"{current.Title}\"; too short for a vote.");
+                // Too short for a proper vote: the vote gets its time, and the next video waits for it.
+                Logger.Log($"Autovote: only {remaining:mm\\:ss} left of \"{current.Title}\"; the next video waits for the vote.");
+                StartVoteAsync(shortest, mustEndBy: null, holdNextVideo: true).FireAndForget("The autovote failed.");
                 return;
             }
+
+            var duration = TimeSpan.FromSeconds(Math.Floor(Math.Min(_votes.Duration.TotalSeconds, available.TotalSeconds)));
 
             // Finding the options takes a moment too (a title lookup may take seconds); the vote manager
             // takes that out of the countdown so that the vote is over by then.
             var mustEndBy = _time.GetUtcNow() + remaining - SafetyMargin;
-            StartVoteAsync(duration, mustEndBy).FireAndForget("The autovote failed.");
+            StartVoteAsync(duration, mustEndBy, holdNextVideo: false).FireAndForget("The autovote failed.");
         }
 
-        private async Task StartVoteAsync(TimeSpan duration, DateTimeOffset mustEndBy)
+        private async Task StartVoteAsync(TimeSpan duration, DateTimeOffset? mustEndBy, bool holdNextVideo)
         {
-            var reply = await _votes.StartAfterCurrentAsync(duration, mustEndBy);
+            var reply = await _votes.StartAfterCurrentAsync(duration, mustEndBy, holdNextVideo);
             if (reply != null)
                 Logger.Log($"Autovote did not start: {reply}");
         }

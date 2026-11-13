@@ -35,6 +35,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly Label _titleLabel;
         private readonly Label _volumeLabel;
         private readonly Label _bufferingLabel;
+        private readonly Label _waitingLabel;
         private readonly Label _twitchStatusLabel;
         private readonly TrackBar _volumeSlider;
         private readonly Button _muteButton;
@@ -45,7 +46,9 @@ namespace YouTubeVideoPlayer.UI
 
         private readonly System.Windows.Forms.Timer _volumeDisplayTimer;
         private readonly System.Windows.Forms.Timer _bufferingAnimationTimer;
+        private readonly System.Windows.Forms.Timer _waitingCountdownTimer;
         private int _bufferingAnimationFrame;
+        private bool _showingWaiting;
         private bool _updatingVolumeSlider;
         private bool _playlistDialogOpen;
 
@@ -80,13 +83,19 @@ namespace YouTubeVideoPlayer.UI
             KeyPreview = true;
 
             // The video view must be added first so it fills the space left by the docked control panel.
-            _videoView = new VideoView { Dock = DockStyle.Fill };
+            // Black where there is no picture, e.g. while the next video waits for a vote.
+            _videoView = new VideoView { Dock = DockStyle.Fill, BackColor = Color.Black };
             Controls.Add(_videoView);
 
             _titleLabel = CreateOverlayLabel(600, 25, 10, ContentAlignment.MiddleLeft, AnchorStyles.Left | AnchorStyles.Bottom);
             _titleLabel.AutoEllipsis = true;
             _volumeLabel = CreateOverlayLabel(100, 40, 10, ContentAlignment.MiddleCenter, AnchorStyles.Top | AnchorStyles.Right);
             _bufferingLabel = CreateOverlayLabel(150, 50, 14, ContentAlignment.MiddleLeft, AnchorStyles.None);
+            _waitingLabel = CreateOverlayLabel(480, 50, 14, ContentAlignment.MiddleCenter, AnchorStyles.None);
+
+            // While the next video waits for a vote, the time left counts down once a second.
+            _waitingCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _waitingCountdownTimer.Tick += (_, __) => UpdateWaitingText();
 
             _volumeDisplayTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             _volumeDisplayTimer.Tick += (_, __) =>
@@ -141,7 +150,8 @@ namespace YouTubeVideoPlayer.UI
             _toolTip.SetToolTip(
                 _autoVoteCheckBox,
                 _autoVote != null
-                    ? "Starts a chat vote 5 minutes before the video ends. The winner plays after the current video."
+                    ? "Starts a chat vote 5 minutes before the video ends. The winner plays after the current video.\n" +
+                      "A video too short for a 2-minute vote is followed by a black screen until the vote is over."
                     : "Needs the Twitch bot (see twitchsettings.json).");
             _controlPanel.Controls.Add(_autoVoteCheckBox);
 
@@ -186,7 +196,8 @@ namespace YouTubeVideoPlayer.UI
             Resize += (_, __) =>
             {
                 UpdateTitleLabelPosition();
-                CenterBufferingLabel();
+                CenterOverlay(_bufferingLabel);
+                CenterOverlay(_waitingLabel);
             };
             _videoView.Resize += (_, __) => UpdateTitleLabelPosition();
             KeyDown += OnKeyDown;
@@ -271,6 +282,9 @@ namespace YouTubeVideoPlayer.UI
         /// <summary>Starts the prepared first video, pauses the playing video, or continues a paused one.</summary>
         private void TogglePlayPause()
         {
+            if (_playback.IsWaitingForHold)
+                return; // the next video starts when the vote is over (Next starts it now)
+
             if (_playback.IsStandby)
                 _playback.PlayNextAsync().FireAndForget("Starting playback via the Play button failed.");
             else if (_playback.IsPaused)
@@ -281,12 +295,17 @@ namespace YouTubeVideoPlayer.UI
 
         /// <summary>
         /// "Play" while standing by or paused, "Pause" while a video plays. Disabled until there is something to
-        /// start or pause: the prepared first video, or a video that has been loaded.
+        /// start or pause: the prepared first video, or a video that has been loaded. Also disabled while the next
+        /// video waits for a vote.
         /// </summary>
         private void UpdatePlayPauseButton()
         {
-            _playPauseButton.Text = _playback.IsStandby || _playback.IsPaused || _playback.Current == null ? "Play" : "Pause";
-            _playPauseButton.Enabled = _playback.IsStandby ? _playback.IsStandbyReady : _playback.Current != null;
+            _playPauseButton.Text = _playback.IsStandby || _playback.IsPaused || _playback.IsWaitingForHold || _playback.Current == null
+                ? "Play"
+                : "Pause";
+            _playPauseButton.Enabled = _playback.IsStandby
+                ? _playback.IsStandbyReady
+                : _playback.Current != null && !_playback.IsWaitingForHold;
         }
 
         private void UpdateTitleLabelPosition()
@@ -306,12 +325,12 @@ namespace YouTubeVideoPlayer.UI
             _titleLabel.BringToFront();
         }
 
-        private void CenterBufferingLabel()
+        private void CenterOverlay(Label label)
         {
-            var x = (ClientSize.Width - _bufferingLabel.Width) / 2;
-            var y = (ClientSize.Height - _bufferingLabel.Height) / 2;
-            _bufferingLabel.Location = new Point(Math.Max(0, x), Math.Max(0, y));
-            _bufferingLabel.BringToFront();
+            var x = (ClientSize.Width - label.Width) / 2;
+            var y = (ClientSize.Height - label.Height) / 2;
+            label.Location = new Point(Math.Max(0, x), Math.Max(0, y));
+            label.BringToFront();
         }
 
         private void ShowTitle(string text)
@@ -330,8 +349,48 @@ namespace YouTubeVideoPlayer.UI
         private void OnPlaybackStateChanged(object? sender, EventArgs e)
         {
             UpdatePlayPauseButton();
+            UpdateWaitingDisplay();
             if (_playback.IsStandby)
                 ShowTitle(_playback.IsStandbyReady ? "Ready - press Play to start" : "Loading first video...");
+        }
+
+        /// <summary>
+        /// While the next video waits for a vote, the picture is black and a label in the middle counts down the time
+        /// left. The title of the finished video is hidden; the next video shows its own.
+        /// </summary>
+        private void UpdateWaitingDisplay()
+        {
+            if (_playback.IsWaitingForHold == _showingWaiting)
+                return;
+
+            _showingWaiting = _playback.IsWaitingForHold;
+            if (_showingWaiting)
+            {
+                ShowTitle(string.Empty);
+                UpdateWaitingText();
+                _waitingLabel.Visible = true;
+                CenterOverlay(_waitingLabel);
+                _waitingCountdownTimer.Start();
+            }
+            else
+            {
+                _waitingCountdownTimer.Stop();
+                _waitingLabel.Visible = false;
+            }
+        }
+
+        private void UpdateWaitingText()
+        {
+            // Rounded up, so the label shows 0:00 only when the vote is really over.
+            _waitingLabel.Text = _playback.HoldRemaining is { } remaining
+                ? $"Waiting for vote to finish... {FormatCountdown(remaining)}"
+                : "Waiting for vote to finish...";
+        }
+
+        private static string FormatCountdown(TimeSpan remaining)
+        {
+            var seconds = (int)Math.Ceiling(remaining.TotalSeconds);
+            return $"{seconds / 60}:{seconds % 60:00}";
         }
 
         private void OnNowPlayingChanged(object? sender, NowPlaying nowPlaying)
@@ -346,7 +405,7 @@ namespace YouTubeVideoPlayer.UI
             {
                 _bufferingLabel.Text = "Buffering...";
                 _bufferingLabel.Visible = true;
-                CenterBufferingLabel();
+                CenterOverlay(_bufferingLabel);
                 _bufferingAnimationFrame = 0;
                 _bufferingAnimationTimer.Start();
             }
@@ -520,6 +579,7 @@ namespace YouTubeVideoPlayer.UI
             UnsubscribeFromManagers();
             _volumeDisplayTimer.Dispose();
             _bufferingAnimationTimer.Dispose();
+            _waitingCountdownTimer.Dispose();
             _toolTip.Dispose();
             _videoView.MediaPlayer = null;
         }

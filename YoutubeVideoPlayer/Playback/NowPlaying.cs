@@ -34,6 +34,44 @@ namespace YouTubeVideoPlayer.Playback
         /// of the regular next one. A later call replaces an earlier one; the current video keeps playing.
         /// </summary>
         void QueueNextVideo(string videoId);
+
+        /// <summary>
+        /// Keeps the next video from starting when the current one ends, until the returned hold is released
+        /// (a vote about the next video that lasts longer than the current video). Meanwhile the screen is black
+        /// and <see cref="IsWaitingForHold"/> is <c>true</c>. An explicit skip or another video ends the hold.
+        /// </summary>
+        IPlaybackHold HoldNextVideo();
+
+        /// <summary>Whether the current video has ended and the player waits for a hold (<see cref="HoldNextVideo"/>) to be released.</summary>
+        bool IsWaitingForHold { get; }
+
+        /// <summary>Whether the current video is paused.</summary>
+        bool IsPaused { get; }
+
+        /// <summary>Whether the first video is prepared but was not started yet.</summary>
+        bool IsStandby { get; }
+
+        /// <summary>Pauses the current video; does nothing without one.</summary>
+        void Pause();
+
+        /// <summary>Continues a paused video; does nothing if it is not paused.</summary>
+        void Resume();
+
+        /// <summary>Plays the next video (also starts the prepared first video while standing by).</summary>
+        Task PlayNextAsync();
+    }
+
+    /// <summary>A hold on the change to the next video, see <see cref="IPlaybackControl.HoldNextVideo"/>.</summary>
+    public interface IPlaybackHold
+    {
+        /// <summary>
+        /// When the hold is expected to be released (on the player's clock), shown as a countdown while the player
+        /// waits; <c>null</c> while it is not known yet.
+        /// </summary>
+        DateTimeOffset? Until { get; set; }
+
+        /// <summary>Lets the player continue: if it is already waiting, the next video starts now. Later calls do nothing.</summary>
+        void Release();
     }
 
     /// <summary>
