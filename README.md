@@ -1,16 +1,17 @@
 # YouTube Video Player
 
-A lightweight Windows Forms application for playing random YouTube videos from your playlists using **LibVLCSharp** and **YoutubeExplode**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and timestamp and mods skip videos.
+A lightweight Windows Forms application for playing YouTube videos from your playlists (in random or playlist order) using **LibVLCSharp** and **YoutubeExplode**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and timestamp and mods skip videos.
 
 ---
 
 ## Features
 
-- Random playback from YouTube playlists
+- Playback from YouTube playlists, per playlist in random order or one video after the other
 - Playlist dialog to add, rename, remove, update and switch playlists
 - Cached video lists per playlist – instant switching, YouTube is only contacted when needed
 - Streams directly from YouTube
-- Automatic retrieval of the highest available video and audio quality
+- Automatic selection of the best video and audio stream (up to 1440p, no HDR, easy-to-decode codecs first; for videos with several audio languages the English track is played, not an automatically dubbed translation)
+- No gap between two videos: the next one is chosen and looked up while the current one plays
 - Automatic fallback to muxed streams when required
 - Fullscreen and borderless mode
 - Volume slider, keyboard volume controls and mute
@@ -48,6 +49,7 @@ Click **Playlists** in the control bar to open the playlist dialog.
 | Remove (Del) | Removes the playlist and its cached video list |
 | Update | Downloads the playlist's video list from YouTube again and shows how many videos were added/removed |
 | Update all | Updates every playlist one after another |
+| Random order (checkbox in the list) | Switches the playlist between random order and playlist order; saved with the playlist |
 
 Links to a single video that contain `&list=...` are accepted as well.
 
@@ -57,7 +59,7 @@ All files live next to the executable.
 
 | File | Content |
 |------|---------|
-| `playlists.json` | The playlists (title + link) and the selected one. Created from `playlists.default.json` on first start |
+| `playlists.json` | The playlists (title, link, order) and the selected one. Created from `playlists.default.json` on first start |
 | `PlaylistCache/<playlist id>.json` | The cached video IDs of one playlist |
 
 Example `playlists.json`:
@@ -87,6 +89,7 @@ Change it in the **Playlists** dialog (the **Random order** column of the list h
 
 - On startup the selected playlist is loaded first and playback starts. It is read from its cache; only a playlist that has never been loaded is downloaded from YouTube.
 - All other playlists are loaded in the background one after another, so switching later is instant.
+- While a video plays, the next one is chosen and looked up in advance, so the change between two videos takes well under a second instead of several seconds of black screen. The choice is kept, so the video that was prepared is the one that plays.
 - Video lists are only downloaded again when you click **Update** / **Update all**. An update always fetches the complete list; if it fails, the previous list stays in use.
 
 ---
@@ -102,7 +105,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
 | `!shufflestatus` | privileged | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
-| `!skipvote` | privileged | Starts a vote: the bot posts 3 random videos from the current playlist; 2 minutes after the last option the winner plays |
+| `!skipvote` | privileged | Starts a vote: the bot posts 3 videos from the current playlist (random ones, or the next episodes if it plays in order); 2 minutes after the last option the winner plays |
 | `!vote <n>` | everyone | Votes for option *n* of the running vote (one vote per user; voting again replaces it) |
 | `!cancelvote` | privileged | Cancels the running vote; the current video keeps playing |
 
@@ -201,13 +204,20 @@ Leave `clientId` empty and set `botUsername` and `oAuthToken` instead. Get the t
 
 When a video is selected:
 
-1. A random video from the current playlist pool is chosen.
-2. Video metadata is downloaded.
-3. The best available stream is selected.
-4. Playback starts immediately.
+1. The next video is chosen: a random one, or the next one in playlist order (see *Random or in order*). A queued vote winner goes first.
+2. Its metadata and streams are looked up. Normally this already happened while the previous video was playing, so it costs no time.
+3. The streams are selected (see below).
+4. Playback starts.
 5. The video title is displayed in the lower-left corner.
 
-If a video cannot be played, the next random video is attempted automatically, without an error dialog.
+If a video cannot be played, the next one is attempted automatically, without an error dialog.
+
+### Stream selection
+
+- **Video:** the tallest picture up to 1440p (4K and above are too heavy to decode), then the codec that is easiest to decode (H.264, then VP9, then 8-bit AV1), then the highest bitrate. HDR streams are only used if nothing else exists, because VLC 3 shows them with washed-out colours.
+- **Audio:** a video with several audio languages plays its English track (the original one if there are several). Without an English track the video's original track plays, instead of an automatically dubbed translation. Videos with a single track play with the highest bitrate.
+- Videos without separate video and audio streams fall back to the best combined stream.
+- The chosen codec, resolution and audio track of every video are written to `errorlog.txt`.
 
 ### Buffering and fail-safe
 
@@ -220,7 +230,7 @@ If a video cannot be played, the next random video is attempted automatically, w
 ## User Interface
 
 - **Video area** – double-click toggles fullscreen.
-- **Control bar** – mute button, volume slider, Twitch status, Playlists, Next, Fullscreen, Borderless.
+- **Control bar** – mute button, volume slider, Twitch status, Autovote checkbox, Playlists, Next, Fullscreen, Borderless.
 - **Overlays** – title (lower left), volume (upper right), buffering (center).
 
 ### Keyboard Shortcuts
@@ -244,7 +254,7 @@ Leaving either mode restores the previous window state.
 
 ## Logging
 
-Errors and playback events are written to `errorlog.txt` next to the executable. The log is cleared on every start and stops growing at 5 MB.
+Errors and playback events (including the chosen streams of every video) are written to `errorlog.txt` next to the executable. The log is cleared on every start and stops growing at 5 MB.
 
 ---
 
@@ -254,8 +264,8 @@ Errors and playback events are written to `errorlog.txt` next to the executable.
 YoutubeVideoPlayer/
 ├── Program.cs              Composition root: creates and wires the managers
 ├── AppCoordinator.cs       Startup sequence; starts/switches playback when the playlist pool changes
-├── Playback/               PlaybackManager (buffering timeout, fail-safe), VlcMediaPlayer (LibVLC)
-├── YouTube/                YouTubeService (YoutubeExplode), stream selection
+├── Playback/               PlaybackManager (buffering timeout, fail-safe), NextVideoPrefetcher (no gap between videos), VlcMediaPlayer (LibVLC)
+├── YouTube/                YouTubeService (YoutubeExplode), stream selection (video quality, audio language)
 ├── Playlists/              PlaylistManager, playlists.json store, per-playlist cache
 ├── Twitch/                 TwitchChatService, ChatCommandManager, Commands/, Voting/, Auth/ (sign-in)
 ├── UI/                     Main form (view only), window modes, dialogs

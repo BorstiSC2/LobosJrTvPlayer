@@ -55,7 +55,7 @@ namespace YouTubeVideoPlayer.YouTube
             return ids;
         }
 
-        private static SelectedStreams SelectStreams(StreamManifest manifest, string videoIdOrUrl)
+        internal static SelectedStreams SelectStreams(StreamManifest manifest, string videoIdOrUrl)
         {
             var candidates = new List<StreamCandidate>();
 
@@ -65,7 +65,9 @@ namespace YouTubeVideoPlayer.YouTube
                     .Select(s => new StreamCandidate(
                         StreamKind.VideoOnly, s.Url, s.Bitrate.BitsPerSecond, s.VideoCodec, s.VideoQuality.MaxHeight)));
                 candidates.AddRange(manifest.GetAudioOnlyStreams()
-                    .Select(s => new StreamCandidate(StreamKind.AudioOnly, s.Url, s.Bitrate.BitsPerSecond, s.AudioCodec)));
+                    .Select(s => new StreamCandidate(
+                        StreamKind.AudioOnly, s.Url, s.Bitrate.BitsPerSecond, s.AudioCodec,
+                        AudioLanguage: s.AudioLanguage?.Code, IsDefaultAudio: s.IsAudioLanguageDefault, AudioLanguageName: s.AudioLanguage?.Name)));
             }
             catch (Exception ex)
             {

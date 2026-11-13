@@ -245,6 +245,48 @@ public class ShuffleTests
 
     #endregion
 
+    #region SequenceChanged (a choice made in advance is out of date)
+
+    [Fact]
+    public void SequenceChanged_IsRaisedWhenTheSelectionOrTheOrderOfTheSelectedPlaylistChanges() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup()
+            .WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2")
+            .WithPlaylist(IdB, "B").WithCache(IdB, "b1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        await WaitForBackgroundLoadingAsync(manager);
+        var raised = 0;
+        manager.SequenceChanged += (_, _) => raised++;
+
+        manager.SetShuffle(IdA, false);        // the playlist that plays
+        Assert.Equal(1, raised);
+
+        manager.SetShuffle(IdA, false);        // no change
+        manager.SetShuffle(IdB, false);        // a playlist that does not play
+        Assert.Equal(1, raised);
+
+        await manager.SelectAsync(IdB);        // another playlist
+        Assert.Equal(2, raised);
+    });
+
+    [Fact]
+    public void SequenceChanged_IsRaisedWhenThePlayingPlaylistIsUpdated() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        var raised = 0;
+        manager.SequenceChanged += (_, _) => raised++;
+
+        setup.OnYouTube(IdA, "a1", "a2");
+        await manager.UpdateAsync(IdA);
+
+        Assert.Equal(1, raised);
+    });
+
+    #endregion
+
     #region Playback and votes follow the order
 
     [Fact]

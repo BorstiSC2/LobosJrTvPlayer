@@ -255,6 +255,150 @@ public class PlaybackManagerTests
         Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos());
     });
 
+    #region Preparing the next video (no gap between two videos)
+
+    [Fact]
+    public void TheNextVideoIsLookedUpWhileTheCurrentOnePlays_AndStartsAtOnceWhenItIsDue() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.YouTube.DidNotReceive().ResolveAsync("v2", Arg.Any<CancellationToken>());
+
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay);
+        await setup.YouTube.Received(1).ResolveAsync("v2", Arg.Any<CancellationToken>()); // looked up during v1
+
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync(); // the clock does not move: no waiting, no lookup
+
+        setup.Player.Received(1).Play("v2.video", "v2.audio");
+        await setup.YouTube.Received(1).ResolveAsync("v2", Arg.Any<CancellationToken>());
+        Assert.Equal("v2", setup.Manager.Current!.VideoId);
+    });
+
+    [Fact]
+    public void ASkipUsesThePreparedVideoToo_AndStillStopsTheOldOneAtOnce() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay);
+
+        var skip = setup.Manager.SkipAsync();
+        setup.Player.Received(1).Stop();
+        await Async.SettleAsync();
+        await skip;
+
+        setup.Player.Received(1).Play("v2.video", "v2.audio");
+    });
+
+    [Fact]
+    public void TheVideoThatWasChosenInAdvanceIsTheOneThatPlays_TheSourceIsAskedOnlyOnce() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2", "v3");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay);
+
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync();
+
+        // A shuffled playlist would pick a different random video on a second request.
+        Assert.Equal(new string?[] { null, "v1" }, setup.NextRequests);
+        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void WhenTheVideoEndsBeforeTheNextOneWasPrepared_TheOldWayIsUsed() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Player.EndReached += Raise.Event(); // before the preparation had a chance to start
+        await Async.SettleAsync();
+        setup.Player.DidNotReceive().Play("v2.video", Arg.Any<string?>()); // still waiting for the pause
+
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        setup.Player.Received(1).Play("v2.video", "v2.audio");
+        await setup.YouTube.Received(1).ResolveAsync("v2", Arg.Any<CancellationToken>());
+    });
+
+    [Fact]
+    public void AQueuedVideoReplacesWhatWasPrepared_AndIsPreparedItself() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay); // v2 is ready
+
+        setup.Manager.QueueNextVideo("winner"); // e.g. the winner of the autovote
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay);
+        await setup.YouTube.Received(1).ResolveAsync("winner", Arg.Any<CancellationToken>());
+
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync();
+
+        Assert.Equal(new[] { "v1.video", "winner.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void WhenThePlaylistChanges_WhatWasPreparedIsForgottenAndChosenAgain() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2", "v3");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay); // v2 is ready
+
+        setup.Source.SequenceChanged += Raise.Event();
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay);  // the source gives v3 now
+
+        setup.Player.EndReached += Raise.Event();
+        await Async.SettleAsync();
+
+        Assert.Equal(new[] { "v1.video", "v3.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void AVideoThatCouldNotBeLookedUpInAdvance_IsHandledTheOldWay() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "bad", "v3");
+        setup.FailToResolve("bad");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay); // the lookup of "bad" fails quietly
+
+        setup.Player.EndReached += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(new[] { "v1.video", "v3.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void EveryVideoThatStartsPreparesTheNextOne() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2", "v3", "v4");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await setup.AdvanceAsync(NextVideoPrefetcher.Delay);
+            setup.Player.EndReached += Raise.Event();
+            await Async.SettleAsync();
+        }
+
+        Assert.Equal(new[] { "v1.video", "v2.video", "v3.video", "v4.video" }, setup.PlayedVideos());
+        Assert.Equal(new string?[] { null, "v1", "v2", "v3" }, setup.NextRequests);
+    });
+
+    [Fact]
+    public void AfterDispose_NothingIsPrepared() => UiContext.Run(async () =>
+    {
+        var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Dispose();
+        await setup.AdvanceAsync(NextVideoPrefetcher.Delay * 2);
+
+        await setup.YouTube.DidNotReceive().ResolveAsync("v2", Arg.Any<CancellationToken>());
+    });
+
+    #endregion
+
     #region The video the next one follows
 
     [Fact]
@@ -521,7 +665,10 @@ public class PlaybackManagerTests
         using var setup = new PlaybackSetup().Queue("v1", "v2");
         await setup.RunAsync(setup.Manager.PlayNextAsync);
         setup.Player.IsPlaying.Returns(true);
-        setup.Player.TimeMs.Returns(_ => setup.Time.GetUtcNow().ToUnixTimeMilliseconds());
+        // The position moves on with every look. (A clock value would be the same for several watchdog
+        // ticks that one big Advance fires in a row, which looks like a frozen video.)
+        var position = 0L;
+        setup.Player.TimeMs.Returns(_ => ++position);
 
         setup.Player.Buffering += Raise.Event<EventHandler<float>>(setup.Player, 5f);
         await setup.AdvanceAsync(TimeSpan.FromSeconds(10));

@@ -55,5 +55,11 @@ namespace YouTubeVideoPlayer.Playback
         /// otherwise the next ones in playlist order.
         /// </summary>
         IReadOnlyList<string> GetNextVideoIds(int count, string? currentVideoId);
+
+        /// <summary>
+        /// Raised when the videos or their order changed (another playlist, an update, a different
+        /// shuffle setting), so a choice that was made in advance is out of date.
+        /// </summary>
+        event EventHandler? SequenceChanged;
     }
 }

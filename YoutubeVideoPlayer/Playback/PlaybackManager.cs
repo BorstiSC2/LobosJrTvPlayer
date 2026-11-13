@@ -31,6 +31,7 @@ namespace YouTubeVideoPlayer.Playback
         private readonly TimeProvider _time;
         private readonly ContextTimer _bufferingTimeoutTimer;
         private readonly ContextTimer _failSafeTimer;
+        private readonly NextVideoPrefetcher _prefetcher;
 
         private CancellationTokenSource? _playNextCancellationTokenSource;
         private Task? _playNextTask;
@@ -59,6 +60,10 @@ namespace YouTubeVideoPlayer.Playback
 
             _bufferingTimeoutTimer = new ContextTimer(_context, BufferingTimeout, periodic: false, OnBufferingTimeout, _time);
             _failSafeTimer = new ContextTimer(_context, FailSafeInterval, periodic: true, OnFailSafeTick, _time);
+
+            // While a video plays, the next one is chosen and resolved, so the change has no gap.
+            _prefetcher = new NextVideoPrefetcher(_youtube, _videoSource, () => _queuedVideoId, _time);
+            _videoSource.SequenceChanged += OnSequenceChanged;
         }
 
         /// <summary>The video currently loaded, or <c>null</c> while nothing has been started.</summary>
@@ -184,10 +189,23 @@ namespace YouTubeVideoPlayer.Playback
 
             Logger.Log($"Queued video '{videoId}' to play after the current one.");
             _queuedVideoId = videoId;
+
+            // The queued video is the one to prepare, not whatever was chosen before.
+            _prefetcher.Start(Current?.VideoId);
         }
 
         /// <summary>Forgets a queued video, e.g. because the pool it came from was switched.</summary>
-        public void ClearQueuedVideo() => _queuedVideoId = null;
+        public void ClearQueuedVideo()
+        {
+            _queuedVideoId = null;
+            _prefetcher.Start(Current?.VideoId);
+        }
+
+        private void OnSequenceChanged(object? sender, EventArgs e)
+        {
+            if (!_disposed)
+                _prefetcher.Start(Current?.VideoId);
+        }
 
         /// <summary>
         /// Runs one playback operation at a time: the previous operation is cancelled and awaited first.
@@ -289,7 +307,10 @@ namespace YouTubeVideoPlayer.Playback
                 // A queued video (e.g. the winner of a chat vote) goes first. It stays queued until it was
                 // started, so an attempt that is cancelled by another skip does not lose it.
                 var queued = _queuedVideoId;
-                string? id = queued;
+
+                // A video that was chosen and resolved while the previous one played: no lookup, no waiting.
+                var prefetched = _prefetcher.Take(after, queued);
+                string? id = queued ?? prefetched?.VideoId;
                 if (id == null && !_videoSource.TryGetNextVideoId(after, out id))
                 {
                     Logger.Log("No videos available to play.");
@@ -300,9 +321,11 @@ namespace YouTubeVideoPlayer.Playback
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(DelayBeforeNextVideo, _time, cancellationToken);
+                    // The pause is a back-off between lookups; there is nothing to back off from here.
+                    if (prefetched == null)
+                        await Task.Delay(DelayBeforeNextVideo, _time, cancellationToken);
 
-                    await PlayVideoByIdAsync(id, cancellationToken);
+                    await PlayVideoByIdAsync(id, cancellationToken, prefetched?.Video);
 
                     if (queued != null && _queuedVideoId == queued)
                         _queuedVideoId = null;
@@ -338,13 +361,16 @@ namespace YouTubeVideoPlayer.Playback
             return false;
         }
 
-        private async Task PlayVideoByIdAsync(string idOrUrl, CancellationToken cancellationToken)
+        /// <param name="resolved">The streams if they were looked up in advance; otherwise they are looked up now.</param>
+        private async Task PlayVideoByIdAsync(string idOrUrl, CancellationToken cancellationToken, Task<ResolvedVideo>? resolved = null)
         {
             Logger.Log($"Queuing new video with Id: {idOrUrl}");
 
             LoadingStarted?.Invoke(this, EventArgs.Empty);
 
-            var video = await _youtube.ResolveAsync(idOrUrl, cancellationToken);
+            var video = resolved != null
+                ? await resolved.WaitAsync(cancellationToken)
+                : await _youtube.ResolveAsync(idOrUrl, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             // Everything the player reports from here on belongs to the new video; late events of the
@@ -357,6 +383,9 @@ namespace YouTubeVideoPlayer.Playback
 
             Current = new NowPlaying(idOrUrl, video.Title, video.Duration);
             NowPlayingChanged?.Invoke(this, Current);
+
+            // Now that this video plays, choose and look up the one after it.
+            _prefetcher.Start(idOrUrl);
         }
 
         private void OnBuffering(float cache)
@@ -479,6 +508,8 @@ namespace YouTubeVideoPlayer.Playback
                 return;
 
             _disposed = true;
+            _videoSource.SequenceChanged -= OnSequenceChanged;
+            _prefetcher.Dispose();
 
             try
             {

@@ -14,11 +14,25 @@ namespace YouTubeVideoPlayer.YouTube
     /// <summary>One stream offered by YouTube.</summary>
     /// <param name="Codec">The codec string from the manifest (e.g. <c>avc1.640028</c>, <c>vp9</c>, <c>vp9.2</c>, <c>av01.0.12M.10</c>), if known.</param>
     /// <param name="Height">The video height in pixels, if known.</param>
-    public sealed record StreamCandidate(StreamKind Kind, string Url, long BitsPerSecond, string? Codec = null, int? Height = null)
+    /// <param name="AudioLanguage">The language code of an audio track (e.g. <c>en-US</c>, <c>de-DE</c>), if the video has several.</param>
+    /// <param name="IsDefaultAudio">The audio track is the video's own (original) one, not a dubbed translation; <c>null</c> if unknown.</param>
+    /// <param name="AudioLanguageName">The name YouTube gives the audio track (e.g. <c>English (US) original</c>), for the log.</param>
+    public sealed record StreamCandidate(
+        StreamKind Kind,
+        string Url,
+        long BitsPerSecond,
+        string? Codec = null,
+        int? Height = null,
+        string? AudioLanguage = null,
+        bool? IsDefaultAudio = null,
+        string? AudioLanguageName = null)
     {
         /// <summary>A short description for the log, e.g. <c>avc1.640028 1080p 4500 kbit/s</c>.</summary>
         public string Describe() =>
-            $"{Codec ?? "unknown codec"}{(Height is { } h ? $" {h}p" : string.Empty)} {BitsPerSecond / 1000} kbit/s";
+            $"{Codec ?? "unknown codec"}{(Height is { } h ? $" {h}p" : string.Empty)} {BitsPerSecond / 1000} kbit/s"
+            + (AudioLanguage != null
+                ? $" [{AudioLanguage}{(AudioLanguageName != null ? $" '{AudioLanguageName}'" : string.Empty)}{(IsDefaultAudio == true ? ", original" : string.Empty)}]"
+                : string.Empty);
     }
 
     /// <summary>The streams to play: a video stream plus an optional separate audio stream.</summary>
@@ -34,8 +48,8 @@ namespace YouTubeVideoPlayer.YouTube
         public const int MaxHeight = 1440;
 
         /// <summary>
-        /// Prefers a video-only stream together with the highest-bitrate audio-only stream (played as VLC
-        /// input slave). The video-only stream is chosen like this:
+        /// Prefers a video-only stream together with an audio-only stream (played as VLC input slave); see
+        /// <see cref="BestAudio"/> for the audio. The video-only stream is chosen like this:
         /// <list type="number">
         /// <item>HDR streams (VP9 profile 2, 10-bit AV1) are only used if there is nothing else: VLC 3 cannot tone-map
         /// them and shows washed-out colours.</item>
@@ -53,11 +67,49 @@ namespace YouTubeVideoPlayer.YouTube
 
             var video = BestVideo(list);
             if (video != null)
-                return new SelectedStreams(video.Url, HighestBitrate(list.Where(s => s.Kind == StreamKind.AudioOnly))?.Url);
+                return new SelectedStreams(video.Url, BestAudio(list)?.Url);
 
             var muxed = HighestBitrate(list.Where(s => s.Kind == StreamKind.Muxed))
                 ?? throw new InvalidOperationException("No muxed stream found");
             return new SelectedStreams(muxed.Url, null);
+        }
+
+        /// <summary>
+        /// The audio-only stream <see cref="Select"/> would pick, or <c>null</c> if there is none. Many videos
+        /// offer one audio track per language (the original and automatically dubbed translations), and
+        /// the dubbed ones often have the higher bitrate. So the language comes first:
+        /// <list type="number">
+        /// <item>An English track (<c>en</c>, <c>en-US</c>, ...); the video's original one if there are several.</item>
+        /// <item>Otherwise the video's original track, whatever its language.</item>
+        /// <item>Without language information (the usual single-track video): all tracks.</item>
+        /// </list>
+        /// Within that group the highest bitrate wins.
+        /// </summary>
+        public static StreamCandidate? BestAudio(IReadOnlyCollection<StreamCandidate> streams)
+        {
+            var audio = streams.Where(s => s.Kind == StreamKind.AudioOnly).ToList();
+            if (audio.Count == 0)
+                return null;
+
+            var pool = audio.Where(IsEnglish).ToList();
+            if (pool.Count == 0)
+                pool = audio.Where(s => s.IsDefaultAudio == true).ToList();
+            if (pool.Count == 0)
+                pool = audio;
+
+            return pool
+                .OrderByDescending(s => s.IsDefaultAudio == true)
+                .ThenByDescending(s => s.BitsPerSecond)
+                .First();
+        }
+
+        private static bool IsEnglish(StreamCandidate stream)
+        {
+            var code = stream.AudioLanguage;
+            return code != null
+                && (code.Equals("en", StringComparison.OrdinalIgnoreCase)
+                    || code.Equals("eng", StringComparison.OrdinalIgnoreCase)
+                    || code.StartsWith("en-", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>The video-only stream <see cref="Select"/> would pick, or <c>null</c> if there is none.</summary>

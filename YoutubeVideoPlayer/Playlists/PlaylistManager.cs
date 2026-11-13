@@ -55,6 +55,9 @@ namespace YouTubeVideoPlayer.Playlists
         /// <summary>A playlist was added, removed, renamed or its load state changed.</summary>
         public event EventHandler? PlaylistsChanged;
 
+        /// <summary>The playable videos or their order changed (see <see cref="IVideoSource.SequenceChanged"/>).</summary>
+        public event EventHandler? SequenceChanged;
+
         /// <summary>
         /// Loads the library, then the selected playlist (from cache, or downloaded if there is none).
         /// The remaining playlists continue loading in the background after this returns.
@@ -183,6 +186,8 @@ namespace YouTubeVideoPlayer.Playlists
             }
 
             Logger.Log($"Playlist '{playlist.Title}' now plays {(shuffle ? "in random order" : "in playlist order")}.");
+            if (playlist.Key == SelectedKey)
+                SequenceChanged?.Invoke(this, EventArgs.Empty); // a video that was chosen in advance may not fit anymore
             PlaylistsChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -484,6 +489,7 @@ namespace YouTubeVideoPlayer.Playlists
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
 
+            SequenceChanged?.Invoke(this, EventArgs.Empty);
             PoolChanged?.Invoke(this, new PoolChangedEventArgs(selectionChanged));
         }
 
