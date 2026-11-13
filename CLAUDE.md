@@ -1,0 +1,117 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+A Windows Forms app (.NET 10, `net10.0-windows`) that plays videos from YouTube playlists in a loop, in random or playlist order (per playlist).
+- YoutubeExplode resolves the streams and playlist contents; the official YouTube API is not used.
+- LibVLCSharp plays the streams.
+- An optional Twitch chat bot (TwitchLib.Client 4.x) answers `!current`, `!timestamp`, `!skip`, `!shufflestatus` and `!toggleshuffle`, and runs chat votes for the next video (`!skipvote`, `!vote n`, `!cancelvote`, and the Autovote option).
+
+## Commands
+
+```bash
+dotnet build YoutubeVideoPlayer.slnx -c Debug
+```
+
+```bash
+dotnet run --project YoutubeVideoPlayer/YoutubeVideoPlayer.csproj
+```
+
+```bash
+dotnet test YoutubeVideoPlayer.Tests/YoutubeVideoPlayer.Tests.csproj
+```
+
+```bash
+dotnet test YoutubeVideoPlayer.Tests/YoutubeVideoPlayer.Tests.csproj --filter "FullyQualifiedName~PlaybackManagerTests"
+```
+
+- The solution is `.slnx` (XML solution format) and needs a recent SDK. At solution level, all configurations map to the `x64` project platform.
+- `<Nullable>` is enabled and the build is currently warning-free. Keep it that way.
+- There is no linter.
+
+## Tests
+
+`YoutubeVideoPlayer.Tests` uses **xUnit** for assertions and **NSubstitute** for mocks; `FakeTimeProvider` (Microsoft.Extensions.TimeProvider.Testing) controls time. The app project grants `InternalsVisibleTo` to it (used for `Logger.LogFilePath`).
+
+- **Seams for external systems:** `IYouTubeService` (YoutubeExplode), `IMediaPlayer` (LibVLC), `ITwitchClient` (TwitchLib), `ITwitchAuthClient` (Twitch OAuth) and `TimeProvider`. New code that talks to the outside world or waits on time should go through these, so it stays testable.
+- **Threading:** manager tests run inside `TestSupport/UiContext.Run(...)`, a single-threaded `SynchronizationContext` that mirrors the UI-thread invariant. Inside it, use `Async.SettleAsync()` / `Async.WaitUntilAsync(...)` to let posted work run, and `FakeTimeProvider.Advance` to fire timers and `Task.Delay`s. A delay that is only scheduled after an earlier one completes needs a second `Advance`.
+- **UI tests** use `UiContext.Run(..., sta: true)`. There, posted callbacks go through the Win32 message queue (like `WindowsFormsSynchronizationContext`), so they also run inside modal dialogs.
+  - Forms are shown transparent and off-screen with `Ui.ShowHidden()`.
+  - Modal forms are answered with `Ui.AnswerNextDialog<T>`, and `MessageBox`es with `Ui.AnswerNextMessageBox`. Both use window messages, never keystrokes or focus, so the user can keep working while the tests run.
+  - A ListView only keeps a selection once its window exists, so `ShowHidden()` dialogs before selecting rows.
+  - A watchdog closes the test thread's windows after the timeout (30 s), so a hanging test fails instead of leaving a dialog open. Unhandled exceptions in WinForms callbacks fail the test (set in a module initializer).
+  - Code that would open a browser (`TwitchLoginDialog.OpenBrowser`) is intentionally not tested.
+- **Logger tests** redirect the static log file and run in the non-parallel `Logger` collection.
+- **Integration tests** (`[IntegrationFact]`: real YouTube) are skipped unless `YTP_INTEGRATION_TESTS=1` is set. `VlcMediaPlayerTests` use the real LibVLC natives but need no network.
+
+## Architecture
+
+`Program.cs` is the composition root. It installs a `WindowsFormsSynchronizationContext` **before** creating the managers, because they capture `SynchronizationContext.Current` in their constructors. It then wires the managers and disposes them after `Application.Run`. The Twitch disconnect runs on the thread pool there, because the message loop is already gone.
+
+**Threading invariant:** all manager state lives on the UI thread.
+- LibVLC events, `ContextTimer` ticks (`Infrastructure/`) and TwitchLib callbacks are `Post`ed onto the UI context.
+- Playlist downloads and cache reads run in `Task.Run`, and their results are applied after `await` on the UI thread.
+- Don't touch manager state from background threads.
+
+**Managers:**
+- `Playback/PlaybackManager`: drives an `IMediaPlayer` (`VlcMediaPlayer` owns LibVLC, `MediaPlayer` and `Media`; `Program` passes its `MediaPlayer` to the form's `VideoView`) and resolves videos through `IYouTubeService` (`YouTube/YouTubeService` on YoutubeExplode).
+  - `PlayNextAsync` is the single entry point for advancing. It cancels and awaits the previous attempt through `_playNextCancellationTokenSource` / `_playNextTask`, using `ReferenceEquals` guards. Keep this pattern.
+  - Streams (`YouTube/StreamSelector`): a video-only stream plus the best audio stream via the VLC option `:input-slave=`, with a fallback to the best muxed stream. The video is the tallest picture up to `StreamSelector.MaxHeight` (1440p; 4K and up are too heavy to decode), then the codec that is easiest to decode (H.264, then VP9, then 8-bit AV1), then the highest bitrate. YouTube only offers H.264 up to 1080p, so 1440p is VP9. HDR streams (VP9 profile 2 = `vp9.2`, 10-bit AV1) are only used if nothing else exists, because VLC 3 cannot tone-map them. `YouTubeService` logs the chosen codec and resolution per video to `errorlog.txt`.
+  - `VlcMediaPlayer` starts LibVLC with `--no-drop-late-frames --no-skip-frames`: after a slow start VLC dropped the first (late) keyframe, and the frames depending on it showed as a flat grey picture with motion outlines until the next keyframe.
+  - The loop is serialized: after every `await` it looks again for a registered operation, so overlapping callers cannot both start one. Only the operation's own cancellation ends it; an `OperationCanceledException` from an HTTP timeout is a normal failure (`when (token.IsCancellationRequested)`).
+  - `NoVideosAvailable` is raised after the operation is unregistered, because its handlers show modal dialogs.
+  - Player events are tagged with a media generation when they are raised and dropped if a newer video started meanwhile.
+  - `VlcMediaPlayer` runs `Play`/`Stop`/`Dispose` one after the other on the thread pool (libvlc 3 `Stop` can deadlock on the UI thread) and reports a failed start via `EncounteredError`. It turns off the video window's own key/mouse handling.
+  - Watchdogs: a buffering timeout (30 s), and a fail-safe check every 20 s that skips after **two** failed checks in a row (not playing, or the position isn't moving). It ignores ticks while an operation is resolving a video and stops when there are no videos.
+  - It gets videos through `IVideoSource` (implemented by `PlaylistManager`) and passes the video that is playing (`Current`), so an ordered playlist continues after it. A video that cannot be played moves that reference forward, so the retry does not pick it again. If every video fails, the retry loop continues indefinitely with a 1 s delay.
+- `Playlists/PlaylistManager`:
+  - Each playlist has a `Shuffle` flag in `playlists.json` (default `true`, also for entries without the value). Shuffled: `TryGetNextVideoId` picks a random video (not the current one); otherwise the next one in the playlist's order, looping after the last (no/unknown current video: the first). `GetNextVideoIds` returns random videos or the following ones in order, never the current one. All playlists combined (`SelectedKey == null`) always shuffle and `CanChangeShuffle` is false. `IShuffleControl` (implemented by `PlaylistManager`) is what `!shufflestatus` / `!toggleshuffle` use; a failed save restores the old value.
+  - `playlists.json` holds the titles, links and selected playlist. It is created from the committed seed `playlists.default.json` and then only the runtime copy next to the exe is edited.
+  - Video IDs are cached per playlist in `PlaylistCache/<listId>.json`, keyed by the YouTube list ID. YouTube is contacted only when there is no cache yet or on an explicit `UpdateAsync` (always a full re-download; the old cache is kept if it fails).
+  - Startup: the selected playlist is loaded first, the rest load sequentially in the background.
+  - `_loadTasks` deduplicates concurrent loads of the same playlist.
+  - `PoolChanged.SelectionChanged` tells the coordinator whether to skip the current video.
+- `AppCoordinator`: startup sequence. It starts playback once the pool is non-empty, and skips on a selection change. It raises `NoVideosAvailable` only when nothing is loading anymore.
+- `Twitch/TwitchChatService` wraps TwitchLib and maps its messages to `ChatCommandContext`, so the commands don't depend on TwitchLib.
+- `Twitch/ChatCommandManager` routes commands from an `IChatChannel` to `IChatCommand` implementations in `Twitch/Commands/`.
+  - Permission checks: `RequiresModerator` allows moderators, the broadcaster and `TwitchSettings.PrivilegedUsers` (login names or user IDs). Anyone else is ignored silently.
+  - The per-command cooldown is shared by all users; a cooldown of zero disables it (and its logging, so `!vote` doesn't flood the log).
+  - To add a command, implement `IChatCommand` and register it in `Program.cs`.
+- `Twitch/Voting/SkipVoteManager`: one vote at a time.
+  - Options (`SkipVoteManager.OptionCount` = 3, not configurable) are random IDs from `IVideoSource.GetNextVideoIds` (never the current video; random if shuffled, otherwise the next episodes in order), with titles fetched from YouTube in parallel; unavailable videos are replaced from spare candidates.
+  - The announcement is a rules message followed by one message per option, `MessageDelay` (2 s) apart. Voting is open as soon as the options are known; the countdown only starts after the last option message.
+  - Votes are keyed by user ID, and a later vote replaces the earlier one.
+  - The countdown uses `Task.Delay` on the UI context, with a halfway reminder for votes of 60 s or more.
+  - `StartAfterCurrentAsync(duration)` starts a vote about the video *after* the current one (rules and result messages say so); its winner goes to `IPlaybackControl.QueueNextVideo` instead of playing at once.
+  - The winner of a regular vote (a random pick on a tie or with no votes) is played through `IPlaybackControl.PlayVideoAsync`, which shares `PlaybackManager`'s cancel-previous-operation guard and falls back to a random video on failure.
+- `Twitch/Voting/AutoVoteManager` (the "Autovote" checkbox in the control bar): a periodic `ContextTimer` check; 5 minutes before the end of the current video it starts an after-current vote, once per `NowPlaying` instance, shortened to end `SafetyMargin` before the video does. It does nothing without a known length, while a vote runs, or while `IChatChannel.IsConnected` is false.
+- `PlaybackManager.QueueNextVideo` queues one video that `PlayNextInternalAsync` plays before random ones. It is only dropped once started or when it cannot be played (a cancelled attempt keeps it); `PlayVideoAsync` replaces it and `AppCoordinator` clears it when the playlist selection changes.
+- `UI/VideoPlayerForm` is a view only. All controls are created in code, not through the designer. Fullscreen and borderless logic live in `UI/WindowModeController`.
+
+**Config and runtime files** (all next to the exe):
+- `twitchsettings.json` (gitignored; template in `twitchsettings.example.json`). If it is missing or incomplete, the bot is off.
+- `twitchtoken.json` (gitignored): the bot's access and refresh token, created by the in-app sign-in.
+- `errorlog.txt` (`Infrastructure/Logger`): cleared on every start, and writes stop once it reaches 5 MB. `Log(message, exception)` writes nothing if `exception` is null.
+
+**Twitch sign-in** (`Twitch/Auth/`), used when `clientId` is set in `twitchsettings.json`:
+- `TwitchAuthClient` (behind `ITwitchAuthClient`) talks to `id.twitch.tv/oauth2` as a **public client** (no client secret). It handles the device code flow, refresh and validation.
+- `TwitchTokenManager`:
+  - It refreshes the token 10 minutes before it expires (access tokens last 4 h) and validates it hourly, which Twitch requires.
+  - Refresh tokens are single use, so `Adopt` **saves the new token before using it**.
+  - Before refreshing it re-reads `twitchtoken.json`, in case another instance sharing the folder already refreshed.
+  - A rejected refresh raises `SignInRequired`; network errors retry after 1 minute. Timers are scheduled by the path that validated or refreshed the token, so a pending retry is not overwritten.
+- `TwitchTokenStore` keeps the token **unencrypted** in `twitchtoken.json` next to the exe (gitignored). This is deliberate, so the app folder can be moved between computers.
+- `TwitchChatService`: TwitchLib only accepts new credentials while disconnected (`SetConnectionCredentials` throws otherwise). So every `TokenChanged` causes a short disconnect, credential swap and reconnect.
+- A failed IRC login triggers one refresh-and-retry before the state becomes `LoginFailed`.
+- `UI/TwitchLoginDialog` runs the device flow. It opens via the clickable Twitch status label in the control bar.
+
+Without `clientId`, the manual `oAuthToken` + `botUsername` from the settings are used, with no renewal.
+
+`<None Remove="PlaylistDownload/**" />` in the csproj excludes an old, local yt-dlp export folder from the project; the app doesn't use it.
+
+## Conventions
+
+- Bump `<AssemblyVersion>` / `<FileVersion>` in the csproj when releasing.
+- Errors during playback are skipped silently and only logged. Message boxes appear only for initialization failures, an empty video pool and failed playlist-dialog actions.

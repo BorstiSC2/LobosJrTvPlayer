@@ -1,12 +1,13 @@
 ﻿using System;
 using System.IO;
 
-namespace YouTubeVideoPlayer
+namespace YouTubeVideoPlayer.Infrastructure
 {
     public static class Logger
     {
         private static readonly object LockObject = new object();
-        private static readonly string LogFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "errorlog.txt");
+        /// <summary>Where the log is written; changeable for tests.</summary>
+        internal static string LogFilePath { get; set; } = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "errorlog.txt");
         private const long MaxLogFileSizeBytes = 5 * 1024 * 1024; // 5 MB
 
         public static void Clear()
@@ -31,7 +32,7 @@ namespace YouTubeVideoPlayer
             return fileInfo.Length >= MaxLogFileSizeBytes;
         }
 
-        public static void Log(string message, Exception exception)
+        public static void Log(string message, Exception? exception)
         {
             if (IsLogFileTooLarge())
             {

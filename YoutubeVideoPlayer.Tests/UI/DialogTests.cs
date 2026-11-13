@@ -1,0 +1,705 @@
+using System.Drawing;
+using Microsoft.Extensions.Time.Testing;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
+using YouTubeVideoPlayer.Playlists;
+using YouTubeVideoPlayer.Tests.TestSupport;
+using YouTubeVideoPlayer.Twitch.Auth;
+using YouTubeVideoPlayer.UI;
+using static YouTubeVideoPlayer.Tests.TestSupport.PlaylistSetup;
+
+namespace YouTubeVideoPlayer.Tests.UI;
+
+public class PlaylistDialogTests
+{
+    private static async Task<(PlaylistSetup Setup, PlaylistManager Manager)> LoadAsync(PlaylistSetup setup)
+    {
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        await Async.WaitUntilAsync(() => !manager.IsLoading && manager.Playlists.All(p => p.State != PlaylistLoadState.NotLoaded));
+        return (setup, manager);
+    }
+
+    private static PlaylistSetup ThreePlaylists() => new PlaylistSetup()
+        .WithPlaylist(IdA, "Alpha", selected: true).WithCache(IdA, "a1", "a2")
+        .WithPlaylist(IdB, "Beta").WithCache(IdB, "b1")
+        .WithPlaylist(IdC, "Unreachable");
+
+    private static ListView List(Form dialog) => dialog.All<ListView>().Single();
+
+    private static Label Status(Form dialog) => dialog.All<Label>().Single();
+
+    private static void SelectRow(Form dialog, int index)
+    {
+        var list = List(dialog);
+        list.SelectedItems.Clear();
+        list.Items[index].Selected = true;
+    }
+
+    [Fact]
+    public void ListsAllPlaylists_WithCountsStatusAndTheActiveOne() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden(); // the selection needs a window handle
+
+        var rows = List(dialog).Items.Cast<ListViewItem>().Select(i => i.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(s => s.Text).ToArray()).ToList();
+
+        Assert.Equal(4, rows.Count);
+        Assert.Equal(new[] { "    All playlists", "", "Random", "", "" }, rows[0]);
+        Assert.Equal("▶ Alpha", rows[1][0]);
+        Assert.Equal("2", rows[1][1]);
+        Assert.Equal("Random", rows[1][2]);
+        Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToLocalTime().ToString("g"), rows[1][3]);
+        Assert.Equal("    Beta", rows[2][0]);
+        Assert.Equal("Failed: no such playlist", rows[3][4]);
+        Assert.Equal(Color.Firebrick, List(dialog).Items[3].ForeColor);
+        Assert.True(List(dialog).Items[1].Selected); // the active playlist is preselected
+    }, sta: true);
+
+    private static CheckBox RandomOrderBox(Form dialog) => dialog.All<CheckBox>().Single(c => c.Text == "Random order");
+
+    [Fact]
+    public void TheOrderColumnAndCheckbox_ShowAndChangeTheOrderOfTheSelectedPlaylist() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var box = RandomOrderBox(dialog);
+
+        // The active playlist (Alpha) is preselected and shuffled by default.
+        Assert.True(box.Enabled);
+        Assert.True(box.Checked);
+
+        box.Checked = false;
+        await Async.SettleAsync();
+
+        Assert.False(manager.Playlists[0].Shuffle);
+        Assert.False(setup.SavedLibrary().Playlists[0].Shuffle); // saved with the playlist
+        Assert.Equal("In order", List(dialog).Items[1].SubItems[2].Text);
+        Assert.Equal("Random", List(dialog).Items[2].SubItems[2].Text); // the others are not touched
+        Assert.True(List(dialog).Items[1].Selected);
+        Assert.False(box.Checked);
+
+        SelectRow(dialog, 2); // Beta is still shuffled
+        Assert.True(box.Checked);
+        SelectRow(dialog, 1);
+        Assert.False(box.Checked);
+
+        box.Checked = true;
+        await Async.SettleAsync();
+        Assert.True(manager.Playlists[0].Shuffle);
+        Assert.Equal("Random", List(dialog).Items[1].SubItems[2].Text);
+    }, sta: true);
+
+    [Fact]
+    public void TheCheckbox_IsCheckedButDisabledForAllPlaylists_AndDisabledWithoutSelection() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var box = RandomOrderBox(dialog);
+
+        SelectRow(dialog, 0); // "All playlists" always plays in random order
+        Assert.True(box.Checked);
+        Assert.False(box.Enabled);
+
+        List(dialog).SelectedItems.Clear();
+        Assert.False(box.Checked);
+        Assert.False(box.Enabled);
+    }, sta: true);
+
+    [Theory]
+    [InlineData(9f)]
+    [InlineData(14f)]
+    [InlineData(16f)]
+    public void ButtonsGrowWithTheFont_SoTheirTextIsNeverCutOff(float fontSize) => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        // A larger font stands in for a scaled display: the buttons used to keep their fixed 23 px height.
+        using var dialog = new PlaylistDialog(manager) { Font = new Font("Segoe UI", fontSize) };
+        dialog.ShowHidden();
+        await Async.SettleAsync();
+
+        foreach (var button in dialog.All<Button>())
+        {
+            var text = TextRenderer.MeasureText(button.Text, button.Font);
+            Assert.True(button.Height >= text.Height + 6, $"'{button.Text}' is {button.Height} px high for {text.Height} px of text");
+            Assert.True(button.Width >= text.Width + 8, $"'{button.Text}' is {button.Width} px wide for {text.Width} px of text");
+
+            // ...and every button is fully inside the dialog.
+            var bounds = dialog.RectangleToClient(button.RectangleToScreen(button.ClientRectangle));
+            Assert.True(dialog.ClientRectangle.Contains(bounds), $"'{button.Text}' lies outside the dialog: {bounds} vs {dialog.ClientRectangle}");
+        }
+    }, sta: true);
+
+    [Fact]
+    public void AllPlaylistsRow_ShowsThePoolSizeWhenActive() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        await manager.SelectAsync(null);
+        using var dialog = new PlaylistDialog(manager);
+
+        Assert.Equal("▶ All playlists", List(dialog).Items[0].Text);
+        Assert.Equal("3", List(dialog).Items[0].SubItems[1].Text);
+    }, sta: true);
+
+    [Fact]
+    public void Buttons_DependOnTheSelection() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden(); // selection events need a window handle
+
+        SelectRow(dialog, 0); // "All playlists"
+        Assert.True(dialog.Button("Play").Enabled);
+        Assert.False(dialog.Button("Rename...").Enabled);
+        Assert.False(dialog.Button("Remove").Enabled);
+        Assert.False(dialog.Button("Update").Enabled);
+        Assert.True(dialog.Button("Update all").Enabled);
+
+        SelectRow(dialog, 2);
+        Assert.True(dialog.Button("Rename...").Enabled);
+        Assert.True(dialog.Button("Remove").Enabled);
+        Assert.True(dialog.Button("Update").Enabled);
+
+        List(dialog).SelectedItems.Clear();
+        Assert.False(dialog.Button("Play").Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void Play_SelectsThePlaylistAndClosesTheDialog() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        SelectRow(dialog, 2);
+        dialog.Button("Play").PerformClick();
+        await Async.WaitUntilAsync(() => dialog.IsDisposed || !dialog.Visible);
+
+        Assert.Equal(IdB, manager.SelectedKey);
+    }, sta: true);
+
+    [Fact]
+    public void Update_ReportsTheResultInTheStatusLine() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        setup.OnYouTube(IdB, "b1", "b2", "b3");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        SelectRow(dialog, 2);
+        dialog.Button("Update").PerformClick();
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated"));
+
+        Assert.Equal("Updated \"Beta\": +2 / −0 videos (3 in total).", Status(dialog).Text);
+        Assert.Equal("3", List(dialog).Items[2].SubItems[1].Text); // the list refreshed
+    }, sta: true);
+
+    [Fact]
+    public void UpdateAll_UpdatesEveryPlaylistAndSummarizes() => UiContext.Run(async () =>
+    {
+        // (Failures would open a MessageBox, which a test cannot close; the manager tests cover them.)
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        setup.OnYouTube(IdA, "a1", "a2", "a3");
+        setup.OnYouTube(IdB);
+        setup.OnYouTube(IdC, "c1", "c2");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        dialog.Button("Update all").PerformClick();
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated 3"));
+
+        Assert.Equal("Updated 3 playlist(s): +3 / −1 videos.", Status(dialog).Text);
+        Assert.Equal(SystemColors.GrayText, Status(dialog).ForeColor);
+        Assert.Equal("2", List(dialog).Items[3].SubItems[1].Text);
+    }, sta: true);
+
+    [Fact]
+    public void Rename_AsksForTheNewName() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        Ui.AnswerNextDialog<TextPromptDialog>(prompt =>
+        {
+            Assert.Equal("Beta", prompt.All<TextBox>().Single().Text);
+            prompt.All<TextBox>().Single().Text = "  Gamma ";
+            prompt.Button("OK").PerformClick();
+        });
+
+        dialog.Button("Rename...").PerformClick();
+
+        Assert.Equal("Gamma", manager.Playlists[1].Title);
+        Assert.Equal("Renamed to \"Gamma\".", Status(dialog).Text);
+        Assert.Equal("    Gamma", List(dialog).Items[2].Text);
+    }, sta: true);
+
+    [Fact]
+    public void Rename_Cancelled_ChangesNothing() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        Ui.AnswerNextDialog<TextPromptDialog>(prompt => prompt.Button("Cancel").PerformClick());
+
+        dialog.Button("Rename...").PerformClick();
+
+        Assert.Equal("Beta", manager.Playlists[1].Title);
+    }, sta: true);
+
+    [Fact]
+    public void TextPrompt_DisablesOkForEmptyInput() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 1);
+        var okEnabled = true;
+        Ui.AnswerNextDialog<TextPromptDialog>(prompt =>
+        {
+            prompt.All<TextBox>().Single().Text = "   ";
+            okEnabled = prompt.Button("OK").Enabled;
+            prompt.Button("Cancel").PerformClick();
+        });
+
+        dialog.Button("Rename...").PerformClick();
+
+        Assert.False(okEnabled);
+    }, sta: true);
+
+    [Fact]
+    public void Add_OpensTheAddDialog_AndAddsThePlaylist() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        setup.YouTube.GetPlaylistTitleAsync("PLdddddddddddddddddddddddddddddddd", Arg.Any<CancellationToken>()).Returns("Delta on YouTube");
+        setup.OnYouTube("PLdddddddddddddddddddddddddddddddd", "d1");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        Ui.AnswerNextDialog<AddPlaylistDialog>(add =>
+        {
+            add.All<TextBox>().First().Text = Url("PLdddddddddddddddddddddddddddddddd");
+            var ok = add.Button("Add");
+            var poll = new System.Windows.Forms.Timer { Interval = 20 };
+            poll.Tick += (_, _) =>
+            {
+                if (!ok.Enabled)
+                    return;
+                poll.Dispose();
+                ok.PerformClick();
+            };
+            poll.Start();
+        });
+
+        dialog.Button("Add...").PerformClick();
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Added"));
+
+        Assert.Equal("Added \"Delta on YouTube\" with 1 videos.", Status(dialog).Text);
+        Assert.Equal(5, List(dialog).Items.Count);
+    }, sta: true);
+
+    [Fact]
+    public void KeyboardShortcuts_Rename() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        var asked = false;
+        Ui.AnswerNextDialog<TextPromptDialog>(prompt => { asked = true; prompt.Button("Cancel").PerformClick(); });
+
+        typeof(Control).GetMethod("OnKeyDown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(dialog, new object[] { new KeyEventArgs(Keys.F2) });
+
+        Assert.True(asked);
+    }, sta: true);
+
+    [Fact]
+    public void Remove_AsksForConfirmation_AndRemovesOnYes() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        string? question = null;
+        Ui.AnswerNextMessageBox(DialogResult.Yes, text => question = text);
+
+        dialog.Button("Remove").PerformClick();
+
+        Assert.Equal("Remove \"Beta\" from the list?", question);
+        Assert.DoesNotContain(manager.Playlists, p => p.Key == IdB);
+        Assert.Equal("Removed \"Beta\".", Status(dialog).Text);
+        Assert.Equal(3, List(dialog).Items.Count);
+    }, sta: true);
+
+    [Fact]
+    public void Remove_AnsweredWithNo_KeepsThePlaylist() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        Ui.AnswerNextMessageBox(DialogResult.No);
+
+        PressKey(dialog, Keys.Delete);
+
+        Assert.Contains(manager.Playlists, p => p.Key == IdB);
+    }, sta: true);
+
+    [Fact]
+    public void EnterKey_PlaysTheSelectedPlaylist() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 0);
+
+        PressKey(dialog, Keys.Enter);
+        await Async.WaitUntilAsync(() => manager.SelectedKey == null);
+    }, sta: true);
+
+    [Fact]
+    public void AFailingAction_IsShownInTheStatusLineAndAMessageBox() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 3); // the unreachable playlist
+        string? message = null;
+        Ui.AnswerNextMessageBox(DialogResult.OK, text => message = text);
+
+        dialog.Button("Play").PerformClick();
+        await Async.WaitUntilAsync(() => message != null && dialog.Button("Play").Enabled, because: "the action finishes after the message box");
+
+        Assert.Equal("no such playlist", message);
+        Assert.Equal("no such playlist", Status(dialog).Text);
+        Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+        Assert.Equal(IdA, manager.SelectedKey);
+        Assert.True(dialog.Visible, "the dialog stays open");
+    }, sta: true);
+
+    [Fact]
+    public void UpdateAll_WithFailures_ListsThemInAMessageBox() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        setup.OnYouTube(IdA, "a1", "a2", "a3");
+        setup.OnYouTube(IdB, "b1");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        string? message = null;
+        Ui.AnswerNextMessageBox(DialogResult.OK, text => message = text);
+
+        dialog.Button("Update all").PerformClick();
+        await Async.WaitUntilAsync(() => message != null);
+        await Async.SettleAsync();
+
+        Assert.Contains("Unreachable: no such playlist", message);
+        Assert.Equal("Updated 2 playlist(s): +1 / −0 videos. 1 failed.", Status(dialog).Text);
+        Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+    }, sta: true);
+
+    [Fact]
+    public void Add_Cancelled_ChangesNothing() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        Ui.AnswerNextDialog<AddPlaylistDialog>(add => add.Button("Cancel").PerformClick());
+
+        dialog.Button("Add...").PerformClick();
+        await Async.SettleAsync();
+
+        Assert.Equal(3, manager.Playlists.Count);
+        Assert.Equal("Double-click a playlist to play it.", Status(dialog).Text);
+    }, sta: true);
+
+    [Fact]
+    public void Rename_ToTheSameName_ChangesNothing() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        Ui.AnswerNextDialog<TextPromptDialog>(prompt => prompt.Button("OK").PerformClick());
+
+        dialog.Button("Rename...").PerformClick();
+
+        Assert.Equal("Double-click a playlist to play it.", Status(dialog).Text);
+    }, sta: true);
+
+    private static void PressKey(Control control, Keys key) =>
+        typeof(Control).GetMethod("OnKeyDown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(control, new object[] { new KeyEventArgs(key) });
+
+    [Fact]
+    public void ChangesFromOutside_RefreshTheList_UntilTheDialogIsClosed() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        var dialog = new PlaylistDialog(manager).ShowHidden();
+
+        manager.Rename(IdB, "Renamed elsewhere");
+        Assert.Equal("    Renamed elsewhere", List(dialog).Items[2].Text);
+
+        dialog.Close();
+        manager.Rename(IdB, "After close"); // must not touch the disposed dialog
+    }, sta: true);
+}
+
+public class AddPlaylistDialogTests
+{
+    private static async Task<(PlaylistSetup Setup, PlaylistManager Manager, AddPlaylistDialog Dialog)> OpenAsync()
+    {
+        var setup = new PlaylistSetup().WithPlaylist(IdA, "Alpha").WithCache(IdA, "a1");
+        setup.YouTube.GetPlaylistTitleAsync(IdB, Arg.Any<CancellationToken>()).Returns("Beta on YouTube");
+        setup.YouTube.GetPlaylistTitleAsync(IdC, Arg.Any<CancellationToken>()).ThrowsAsync(new HttpRequestException("This playlist is private."));
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        return (setup, manager, new AddPlaylistDialog(manager).ShowHidden());
+    }
+
+    private static TextBox Link(Form dialog) => dialog.All<TextBox>().First();
+
+    private static TextBox Name(Form dialog) => dialog.All<TextBox>().Last();
+
+    private static Label Status(Form dialog) => dialog.All<Label>().Single(l => l.MaximumSize.Width == 460);
+
+    [Fact]
+    public void InitiallyAsksForALink_AndCannotBeConfirmed() => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+
+        Assert.Equal("Paste the link of a YouTube playlist.", Status(dialog).Text);
+        Assert.False(dialog.Button("Add").Enabled);
+        Assert.False(Name(dialog).Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void AValidLink_PrefillsTheNameFromYouTube() => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+
+        Link(dialog).Text = $"https://www.youtube.com/watch?v=x&list={IdB}";
+        await Async.WaitUntilAsync(() => dialog.Button("Add").Enabled);
+
+        Assert.Equal("Beta on YouTube", Name(dialog).Text);
+        Assert.True(Name(dialog).Enabled);
+        Assert.Contains("Found on YouTube", Status(dialog).Text);
+        Assert.Equal("Beta on YouTube", dialog.PlaylistTitle);
+        Assert.Equal(Url(IdB), dialog.PlaylistUrl);
+    }, sta: true);
+
+    [Fact]
+    public void AnEditedName_IsKeptWhenTheLinkChanges() => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+        Link(dialog).Text = Url(IdB);
+        await Async.WaitUntilAsync(() => dialog.Button("Add").Enabled);
+
+        Name(dialog).Text = "  My own name ";
+        Link(dialog).Text = Url(IdB) + "&x=1";
+        await Async.WaitUntilAsync(() => dialog.Button("Add").Enabled);
+
+        Assert.Equal("My own name", dialog.PlaylistTitle);
+    }, sta: true);
+
+    [Fact]
+    public void AnEmptyName_CannotBeConfirmed() => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+        Link(dialog).Text = Url(IdB);
+        await Async.WaitUntilAsync(() => dialog.Button("Add").Enabled);
+
+        Name(dialog).Text = "  ";
+
+        Assert.False(dialog.Button("Add").Enabled);
+    }, sta: true);
+
+    [Theory]
+    [InlineData("https://example.com/not-youtube", "This is not a valid YouTube playlist link.")]
+    [InlineData("ALREADY", "This playlist is already in the list.")]
+    [InlineData("PRIVATE", "The playlist could not be found on YouTube: This playlist is private.")]
+    public void ProblemsAreExplained(string link, string expected) => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+
+        Link(dialog).Text = link switch { "ALREADY" => Url(IdA), "PRIVATE" => Url(IdC), _ => link };
+        await Async.WaitUntilAsync(() => Status(dialog).Text == expected);
+
+        Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+        Assert.False(dialog.Button("Add").Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void ClearingTheLink_AsksForOneAgain() => UiContext.Run(async () =>
+    {
+        var (setup, _, dialog) = await OpenAsync();
+        using var __ = setup;
+        using var ___ = dialog;
+        Link(dialog).Text = "x";
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("This is not"));
+
+        Link(dialog).Text = "";
+        await Async.WaitUntilAsync(() => Status(dialog).Text == "Paste the link of a YouTube playlist.");
+    }, sta: true);
+}
+
+public class TwitchLoginDialogTests
+{
+    private sealed class SignIn : IDisposable
+    {
+        private readonly TempDirectory _dir = new();
+
+        public SignIn(string login)
+        {
+            Auth.StartDeviceFlowAsync(Arg.Any<CancellationToken>()).Returns(
+                new DeviceCodeInfo("dev", "WXYZ-9876", "https://www.twitch.tv/activate?device-code=WXYZ-9876", TimeSpan.FromMinutes(30), TimeSpan.FromSeconds(1)));
+            Auth.PollDeviceTokenAsync("dev", Arg.Any<CancellationToken>()).Returns(
+                new DevicePollResult(DevicePollStatus.Success, new TokenResponse("acc", "ref", TimeSpan.FromHours(4), Array.Empty<string>())));
+            Auth.ValidateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new TokenValidation(login, "1", TimeSpan.FromHours(4), Array.Empty<string>()));
+            Manager = new TwitchTokenManager(Auth, new TwitchTokenStore(_dir.Path), timeProvider: Time);
+        }
+
+        public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero));
+
+        public ITwitchAuthClient Auth { get; } = Substitute.For<ITwitchAuthClient>();
+
+        public TwitchTokenManager Manager { get; }
+
+        public void Dispose()
+        {
+            Manager.Dispose();
+            _dir.Dispose();
+        }
+    }
+
+    private static Label Status(Form dialog) => dialog.All<Label>().Last();
+
+    private static TextBox Code(Form dialog) => dialog.All<TextBox>().Single();
+
+    [Fact]
+    public void ShowsTheCode_AndReportsTheSuccessfulSignIn() => UiContext.Run(async () =>
+    {
+        using var signIn = new SignIn("lobosbot");
+        using var dialog = new TwitchLoginDialog(signIn.Manager, "LobosBot").ShowHidden();
+
+        await Async.WaitUntilAsync(() => Code(dialog).Text == "WXYZ-9876");
+        Assert.True(dialog.Button("Open activation page").Enabled);
+        Assert.True(dialog.Button("Copy code").Enabled);
+        Assert.StartsWith("Waiting for the confirmation on twitch.tv", Status(dialog).Text);
+
+        signIn.Time.Advance(TimeSpan.FromSeconds(1));
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Signed in"));
+
+        Assert.Equal("Signed in as \"lobosbot\". The token is renewed automatically from now on.", Status(dialog).Text);
+        Assert.Equal("Close", dialog.All<Button>().Single(b => b.Text is "Close" or "Cancel").Text);
+        Assert.False(dialog.Button("New code").Visible);
+        Assert.Equal("lobosbot", signIn.Manager.Current!.Login);
+    }, sta: true);
+
+    [Fact]
+    public void WarnsWhenSignedInWithAnotherAccountThanTheBot() => UiContext.Run(async () =>
+    {
+        using var signIn = new SignIn("myownaccount");
+        using var dialog = new TwitchLoginDialog(signIn.Manager, "lobosbot").ShowHidden();
+        await Async.WaitUntilAsync(() => Code(dialog).Text == "WXYZ-9876");
+
+        signIn.Time.Advance(TimeSpan.FromSeconds(1));
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Signed in"));
+
+        Assert.Contains("botUsername in the settings is \"lobosbot\"", Status(dialog).Text);
+        Assert.Equal(Color.Firebrick, Status(dialog).ForeColor);
+        Assert.True(dialog.Button("New code").Visible);
+    }, sta: true);
+
+    [Fact]
+    public void AFailedSignIn_OffersANewCode() => UiContext.Run(async () =>
+    {
+        using var signIn = new SignIn("lobosbot");
+        signIn.Auth.PollDeviceTokenAsync("dev", Arg.Any<CancellationToken>()).Returns(new DevicePollResult(DevicePollStatus.Denied));
+        using var dialog = new TwitchLoginDialog(signIn.Manager, "").ShowHidden();
+        await Async.WaitUntilAsync(() => Code(dialog).Text == "WXYZ-9876");
+
+        signIn.Time.Advance(TimeSpan.FromSeconds(1));
+        await Async.WaitUntilAsync(() => dialog.Button("New code").Visible);
+
+        Assert.Equal("The authorization was declined on twitch.tv.", Status(dialog).Text);
+        Assert.False(dialog.Button("Copy code").Enabled);
+
+        // A new attempt requests a new code.
+        signIn.Auth.PollDeviceTokenAsync("dev", Arg.Any<CancellationToken>()).Returns(
+            new DevicePollResult(DevicePollStatus.Success, new TokenResponse("acc", "ref", TimeSpan.FromHours(4), Array.Empty<string>())));
+        dialog.Button("New code").PerformClick();
+        await Async.SettleAsync();
+        signIn.Time.Advance(TimeSpan.FromSeconds(1));
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Signed in"));
+        await signIn.Auth.Received(2).StartDeviceFlowAsync(Arg.Any<CancellationToken>());
+    }, sta: true);
+
+    [Fact]
+    public void CopyCode_PutsTheCodeOnTheClipboard() => UiContext.Run(async () =>
+    {
+        using var signIn = new SignIn("lobosbot");
+        using var dialog = new TwitchLoginDialog(signIn.Manager, "").ShowHidden();
+        await Async.WaitUntilAsync(() => Code(dialog).Text == "WXYZ-9876");
+        // Keep a copy of the user's clipboard and put it back afterwards, so running the tests does not disturb them.
+        var saved = new DataObject();
+        var current = Clipboard.GetDataObject();
+        foreach (var format in current?.GetFormats(autoConvert: false) ?? Array.Empty<string>())
+        {
+            try
+            {
+                saved.SetData(format, current!.GetData(format, autoConvert: false));
+            }
+            catch (Exception)
+            {
+                // Some formats cannot be read back; skip them.
+            }
+        }
+
+        try
+        {
+            dialog.Button("Copy code").PerformClick();
+
+            Assert.Equal("WXYZ-9876", Clipboard.GetText());
+        }
+        finally
+        {
+            if (saved.GetFormats().Length > 0)
+                Clipboard.SetDataObject(saved, copy: true);
+            else
+                Clipboard.Clear();
+        }
+    }, sta: true);
+
+    [Fact]
+    public void Closing_CancelsTheSignIn() => UiContext.Run(async () =>
+    {
+        using var signIn = new SignIn("lobosbot");
+        signIn.Auth.PollDeviceTokenAsync("dev", Arg.Any<CancellationToken>()).Returns(new DevicePollResult(DevicePollStatus.Pending));
+        var dialog = new TwitchLoginDialog(signIn.Manager, "").ShowHidden();
+        await Async.WaitUntilAsync(() => Code(dialog).Text == "WXYZ-9876");
+
+        dialog.Close();
+        signIn.Time.Advance(TimeSpan.FromMinutes(1));
+        await Async.SettleAsync();
+
+        Assert.Null(signIn.Manager.Current);
+        await signIn.Auth.DidNotReceiveWithAnyArgs().PollDeviceTokenAsync(default!, default);
+    }, sta: true);
+}

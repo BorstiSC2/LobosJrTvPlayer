@@ -2,7 +2,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 
-namespace YoutubeVideoPlayer
+namespace YouTubeVideoPlayer.UI
 {
     partial class VideoPlayerForm
     {

@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Twitch bot credentials (see twitchsettings.example.json)
+twitchsettings.json
+
+# Twitch bot sign-in (access + refresh token), created at runtime
+twitchtoken.json

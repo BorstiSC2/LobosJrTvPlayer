@@ -1,26 +1,42 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
 	<OutputType>WinExe</OutputType>
 	<TargetFramework>net10.0-windows</TargetFramework>
 	<UseWindowsForms>true</UseWindowsForms>
+	<Nullable>enable</Nullable>
 	<AssemblyName>YouTubeVideoPlayer</AssemblyName>
 	<RootNamespace>YouTubeVideoPlayer</RootNamespace>
 	<Platforms>AnyCPU;x64</Platforms>
-	<AssemblyVersion>1.0.5</AssemblyVersion>
-	<FileVersion>1.0.4</FileVersion>
+	<AssemblyVersion>1.1.0</AssemblyVersion>
+	<FileVersion>1.1.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
 	<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
 	<PackageReference Include="LibVLCSharp" Version="3.10.1" />
 	<PackageReference Include="LibVLCSharp.WinForms" Version="3.10.1" />
-	<PackageReference Include="YoutubeExplode" Version="6.6.1" />
+	<PackageReference Include="TwitchLib.Client" Version="4.0.2" />
+	<PackageReference Include="YoutubeExplode" Version="6.6.3" />
 	<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="videos.json">
+    <InternalsVisibleTo Include="YouTubeVideoPlayer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Local helper tools that are not part of the app (and not in the repository). -->
+    <None Remove="PlaylistDownload/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Seed for playlists.json; the app copies it on first start and only edits the copy. -->
+    <None Update="playlists.default.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Bot credentials stay local (gitignored); copied only if the file exists. -->
+    <None Update="twitchsettings.json" Condition="Exists('twitchsettings.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

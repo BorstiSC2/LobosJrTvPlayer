@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "clientId": "your_application_client_id",
+  "botUsername": "your_bot_account",
+  "oAuthToken": "",
+  "channel": "your_channel",
+  "timestampCooldownSeconds": 5,
+  "currentCooldownSeconds": 5,
+  "skipCooldownSeconds": 3,
+  "shuffleCooldownSeconds": 3,
+  "skipVoteDurationSeconds": 120,
+  "privilegedUsers": [
+    "your_login_name",
+    "123456789"
+  ]
+}
