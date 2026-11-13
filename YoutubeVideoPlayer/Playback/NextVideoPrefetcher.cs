@@ -38,6 +38,12 @@ namespace YouTubeVideoPlayer.Playback
         /// <summary>How long a prepared video is good if its URLs do not say when they expire.</summary>
         public static readonly TimeSpan FallbackLifetime = TimeSpan.FromMinutes(30);
 
+        /// <summary>
+        /// Raised on the creating thread when the current preparation has finished: <c>true</c> if the video was
+        /// resolved, <c>false</c> if the lookup failed. Not raised for a preparation that was replaced or dropped.
+        /// </summary>
+        public event EventHandler<bool>? PreparationFinished;
+
         private readonly IYouTubeService _youtube;
         private readonly IVideoSource _videoSource;
         private readonly Func<string?> _queuedVideo;
@@ -64,9 +70,27 @@ namespace YouTubeVideoPlayer.Playback
             if (_disposed || currentVideoId == null)
                 return;
 
-            var entry = new Entry(currentVideoId);
+            Begin(currentVideoId, Delay);
+        }
+
+        /// <summary>
+        /// Starts preparing the very first video (nothing plays yet, so <see cref="Take"/> is asked with
+        /// <c>after == null</c>). There is no video start to wait for, so it begins at once.
+        /// </summary>
+        public void StartFirst()
+        {
+            Cancel();
+            if (_disposed)
+                return;
+
+            Begin(null, TimeSpan.Zero);
+        }
+
+        private void Begin(string? after, TimeSpan delay)
+        {
+            var entry = new Entry(after);
             _entry = entry;
-            RunAsync(entry).FireAndForget("Preparing the next video failed.");
+            RunAsync(entry, delay).FireAndForget("Preparing the next video failed.");
         }
 
         /// <summary>Drops the prepared video (or the preparation that is still running).</summary>
@@ -106,12 +130,13 @@ namespace YouTubeVideoPlayer.Playback
             return new PrefetchedVideo(entry.VideoId!, entry.Video!);
         }
 
-        private async Task RunAsync(Entry entry)
+        private async Task RunAsync(Entry entry, TimeSpan delay)
         {
             var token = entry.Cancellation.Token;
             try
             {
-                await Task.Delay(Delay, _time, token);
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, _time, token);
 
                 var id = _queuedVideo();
                 if (id == null && !_videoSource.TryGetNextVideoId(entry.After, out id))
@@ -124,6 +149,7 @@ namespace YouTubeVideoPlayer.Playback
                 var resolved = await video;
                 entry.ExpiresAt = ExpiryOf(resolved);
                 Logger.Log($"Prepared the next video '{id}' in advance.");
+                Finished(entry, success: true);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -133,7 +159,14 @@ namespace YouTubeVideoPlayer.Playback
             {
                 entry.Failed = true;
                 Logger.Log($"Preparing the next video '{entry.VideoId}' in advance failed; it is looked up when it is due.", ex);
+                Finished(entry, success: false);
             }
+        }
+
+        private void Finished(Entry entry, bool success)
+        {
+            if (!_disposed && ReferenceEquals(_entry, entry))
+                PreparationFinished?.Invoke(this, success);
         }
 
         /// <summary>The earlier of the two stream URLs' expiry times, minus a margin.</summary>
@@ -167,9 +200,10 @@ namespace YouTubeVideoPlayer.Playback
         /// <summary>One preparation: for the video that follows <see cref="After"/>.</summary>
         private sealed class Entry
         {
-            public Entry(string after) => After = after;
+            public Entry(string? after) => After = after;
 
-            public string After { get; }
+            /// <summary>The video that played when this was started; <c>null</c> for the very first video.</summary>
+            public string? After { get; }
 
             public CancellationTokenSource Cancellation { get; } = new();
 

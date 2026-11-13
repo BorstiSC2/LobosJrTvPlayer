@@ -37,6 +37,23 @@ namespace YouTubeVideoPlayer.Twitch
         private bool _initialized;
         private bool _loginRetried;
         private bool _disposed;
+        private bool _quietReconnect;
+        private bool _hasConnected;
+
+        /// <summary>Posted in chat when the bot connects for the first time after the app started.</summary>
+        internal const string ConnectedMessage = "Vod-Bot online. Have fun watching!";
+
+        /// <summary>
+        /// Posted in chat when the bot is back after the connection was lost (not for a credential swap
+        /// after a token renewal).
+        /// </summary>
+        internal const string ReconnectedMessage = "Vod-Bot lost its connection and is back online.";
+
+        /// <summary>Posted in chat when the application closes while the bot is connected.</summary>
+        internal const string GoodbyeMessage = "Vod-Bot is going offline. See you next time!";
+
+        /// <summary>How long the goodbye gets to leave TwitchLib's send queue before the connection is closed.</summary>
+        private static readonly TimeSpan GoodbyeFlushDelay = TimeSpan.FromMilliseconds(500);
 
         /// <param name="tokens">The app sign-in; <c>null</c> to use the manual token from the settings.</param>
         /// <param name="client">The TwitchLib client; a new <see cref="TwitchClient"/> by default.</param>
@@ -132,7 +149,11 @@ namespace YouTubeVideoPlayer.Twitch
                 var credentials = new ConnectionCredentials(login, accessToken);
 
                 if (_client.IsConnected)
+                {
+                    // A planned credential swap: the chat should not see a new greeting every few hours.
+                    _quietReconnect = true;
                     await Task.Run(() => _client.DisconnectAsync());
+                }
 
                 if (!_initialized)
                 {
@@ -153,6 +174,7 @@ namespace YouTubeVideoPlayer.Twitch
             catch (Exception ex)
             {
                 Logger.Log("Connecting to Twitch failed.", ex);
+                _quietReconnect = false;
                 SetState(TwitchConnectionState.Disconnected);
             }
             finally
@@ -277,6 +299,20 @@ namespace YouTubeVideoPlayer.Twitch
 
             State = state;
             StateChanged?.Invoke(this, state);
+
+            if (state == TwitchConnectionState.Connected)
+            {
+                // Joining and reconnecting both end up here; only the first change to Connected announces itself.
+                var quiet = _quietReconnect;
+                var initial = !_hasConnected;
+                _quietReconnect = false;
+                _hasConnected = true;
+                if (!quiet)
+                {
+                    SendMessageAsync(initial ? ConnectedMessage : ReconnectedMessage)
+                        .FireAndForget("Sending the Twitch connect message failed.");
+                }
+            }
         }
 
         private void Post(Action action)
@@ -292,6 +328,13 @@ namespace YouTubeVideoPlayer.Twitch
         {
             if (_disposed)
                 return;
+
+            // Say goodbye while the connection is still up (SendMessageAsync is a no-op once disposed).
+            if (State == TwitchConnectionState.Connected)
+            {
+                await SendMessageAsync(GoodbyeMessage);
+                await Task.Delay(GoodbyeFlushDelay);
+            }
 
             _disposed = true;
             if (_tokens != null)

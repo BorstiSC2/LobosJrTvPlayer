@@ -11,6 +11,8 @@ namespace YouTubeVideoPlayer.UI
         private TextPromptDialog(string title, string prompt, string initialText)
         {
             Text = title;
+            if (AppIcon.Instance is { } icon)
+                Icon = icon;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;

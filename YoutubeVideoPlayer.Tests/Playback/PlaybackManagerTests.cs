@@ -711,6 +711,186 @@ public class PlaybackManagerTests
 
     #endregion
 
+    #region Standing by (the app opens paused)
+
+    [Fact]
+    public void EnterStandby_PreparesTheFirstVideoWithoutPlayingIt() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        var changes = 0;
+        setup.Manager.StateChanged += (_, _) => changes++;
+
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        Assert.True(setup.Manager.IsStandby);
+        Assert.True(setup.Manager.IsStandbyReady);
+        Assert.Equal(2, changes); // standing by, then ready
+        Assert.Null(setup.Manager.Current);
+        Assert.Empty(setup.PlayedVideos());
+        await setup.YouTube.Received(1).ResolveAsync("v1", Arg.Any<CancellationToken>());
+    });
+
+    [Fact]
+    public void Standby_IsOnlyReadyOnceTheFirstVideoHasBeenLookedUp() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        var lookup = new TaskCompletionSource<ResolvedVideo>();
+        setup.YouTube.ResolveAsync("v1", Arg.Any<CancellationToken>()).Returns(lookup.Task);
+
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+        Assert.True(setup.Manager.IsStandby);
+        Assert.False(setup.Manager.IsStandbyReady);
+
+        lookup.SetResult(PlaybackSetup.Resolved("v1"));
+        await Async.SettleAsync();
+        Assert.True(setup.Manager.IsStandbyReady);
+    });
+
+    [Fact]
+    public void Standby_IsReadyAlsoWhenTheLookupFailed_SoPlayIsNeverBlocked() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        setup.FailToResolve("v1");
+
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        Assert.True(setup.Manager.IsStandbyReady);
+    });
+
+    [Fact]
+    public void PlayNext_AfterStandby_StartsThePreparedVideo_WithoutWaitingOrLookingItUpAgain() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        await setup.Manager.PlayNextAsync(); // no clock advance: nothing to wait for
+
+        Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos());
+        Assert.Equal("v1", setup.Manager.Current!.VideoId);
+        Assert.False(setup.Manager.IsStandby);
+        await setup.YouTube.Received(1).ResolveAsync("v1", Arg.Any<CancellationToken>());
+    });
+
+    [Fact]
+    public void Skip_WhileStandingBy_StartsThePreparedVideoToo() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        await setup.Manager.SkipAsync();
+
+        Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos());
+        Assert.False(setup.Manager.IsStandby);
+    });
+
+    [Fact]
+    public void Standby_PreparesAgainWhenThePlaylistChanges() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        setup.Source.SequenceChanged += Raise.Event();
+        await Async.SettleAsync();
+        await setup.Manager.PlayNextAsync();
+
+        Assert.Equal(new[] { "v2.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void Standby_FallsBackToALookupWhenThePreparationFailed() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        setup.FailToResolve("v1");
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        Assert.Equal(new[] { "v2.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void EnterStandby_DoesNothingOnceAVideoWasStarted() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Manager.EnterStandby();
+
+        Assert.False(setup.Manager.IsStandby);
+    });
+
+    #endregion
+
+    #region Pausing
+
+    [Fact]
+    public void Pause_PausesThePlayer_AndTheWatchdogDoesNotSkipAPausedVideo() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Manager.Pause();
+        setup.Player.IsPlaying.Returns(false); // a paused player is not "playing"
+        for (var check = 0; check < 6; check++)
+            await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
+
+        setup.Player.Received(1).Pause();
+        Assert.True(setup.Manager.IsPaused);
+        Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos()); // not skipped
+    });
+
+    [Fact]
+    public void Resume_ContinuesThePausedVideo_AndOnlyOnce() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+
+        setup.Manager.Pause();
+        setup.Manager.Resume();
+        setup.Manager.Resume();
+
+        setup.Player.Received(1).Resume();
+        Assert.False(setup.Manager.IsPaused);
+    });
+
+    [Fact]
+    public void Pause_WithoutAVideo_DoesNothing() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup();
+
+        setup.Manager.Pause();
+        setup.Manager.Resume();
+
+        setup.Player.DidNotReceive().Pause();
+        setup.Player.DidNotReceive().Resume();
+        Assert.False(setup.Manager.IsPaused);
+        await Task.CompletedTask;
+    });
+
+    [Fact]
+    public void ANewVideo_EndsThePause_SoALateResumeDoesNotTouchIt() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        setup.Manager.Pause();
+
+        await setup.RunAsync(setup.Manager.SkipAsync);
+        setup.Manager.Resume();
+
+        Assert.False(setup.Manager.IsPaused);
+        Assert.Equal("v2", setup.Manager.Current!.VideoId);
+        setup.Player.DidNotReceive().Resume();
+    });
+
+    #endregion
+
     #region Fail-safe watchdog
 
     [Fact]

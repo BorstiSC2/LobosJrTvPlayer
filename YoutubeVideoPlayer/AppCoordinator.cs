@@ -18,6 +18,7 @@ namespace YouTubeVideoPlayer
         private readonly TwitchChatService? _twitch;
         private bool _initialized;
         private bool _playbackStarted;
+        private bool _standbyDone;
         private bool _noVideosReported;
 
         public AppCoordinator(PlaybackManager playback, PlaylistManager playlists, TwitchChatService? twitch)
@@ -86,7 +87,18 @@ namespace YouTubeVideoPlayer
             {
                 _playbackStarted = true;
                 _noVideosReported = false;
-                _playback.PlayNextAsync().FireAndForget("Starting playback failed.");
+
+                // The app opens paused: the first video is prepared and starts when the user presses Play.
+                // Later starts (e.g. after the pool ran empty) play at once.
+                if (!_standbyDone)
+                {
+                    _standbyDone = true;
+                    _playback.EnterStandby();
+                }
+                else
+                {
+                    _playback.PlayNextAsync().FireAndForget("Starting playback failed.");
+                }
             }
             else if (!_playlists.IsLoading && !_noVideosReported)
             {

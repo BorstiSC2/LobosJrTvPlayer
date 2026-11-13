@@ -13,6 +13,7 @@ using YouTubeVideoPlayer.Twitch;
 using YouTubeVideoPlayer.Twitch.Auth;
 using YouTubeVideoPlayer.Twitch.Voting;
 using YouTubeVideoPlayer.UI;
+using YouTubeVideoPlayer.YouTube;
 using static YouTubeVideoPlayer.Tests.TestSupport.PlaylistSetup;
 
 namespace YouTubeVideoPlayer.Tests.UI;
@@ -95,6 +96,13 @@ public class VideoPlayerFormTests
 
         public Button MuteButton => Form.All<Button>().Single(b => b.Width == 40);
 
+        /// <summary>Presses the Play button and waits until the video has started.</summary>
+        public async Task PressPlayAsync()
+        {
+            Form.Button("Play").PerformClick();
+            await Async.WaitUntilAsync(() => Playback.Current != null);
+        }
+
         public async Task ShowAsync()
         {
             Form.ShowHidden();            // Load starts the coordinator
@@ -104,7 +112,7 @@ public class VideoPlayerFormTests
             // take longer than one settle when the machine is busy. So advance the clock until a video has
             // started (bounded: an app without playable videos never gets one).
             var attempts = Playlists.Library.Playlists.Count > 0 ? 25 : 1;
-            for (var i = 0; i < attempts && (i == 0 || Playback.Current == null); i++)
+            for (var i = 0; i < attempts && (i == 0 || (Playback.Current == null && !Playback.IsStandbyReady)); i++)
             {
                 Time.Advance(PlaybackManager.DelayBeforeNextVideo);
                 await Async.SettleAsync();
@@ -236,14 +244,63 @@ public class VideoPlayerFormTests
     #region Overlays
 
     [Fact]
-    public void Startup_PlaysAVideo_AndShowsItsTitle() => UiContext.Run(async () =>
+    public void Startup_StandsBy_AndThePlayButtonStartsTheFirstVideo() => UiContext.Run(async () =>
     {
         using var app = new App();
 
         await app.ShowAsync();
 
-        Assert.StartsWith("Title a", app.TitleLabel.Text);
+        Assert.True(app.Playback.IsStandbyReady);
+        Assert.Null(app.Playback.Current);
+        Assert.Equal("Ready - press Play to start", app.TitleLabel.Text);
+        Assert.True(app.Form.Button("Play").Enabled);
         Assert.True(app.TitleLabel.Visible);
+        app.Player.DidNotReceiveWithAnyArgs().Play(default!, default);
+
+        await app.PressPlayAsync();
+
+        Assert.StartsWith("Title a", app.TitleLabel.Text);
+        Assert.Equal("Pause", app.Form.All<Button>().Single(b => b.Text == "Pause").Text);
+    }, sta: true);
+
+    [Fact]
+    public void ThePlayButton_IsDisabledAndNoReadyTitleShown_UntilTheFirstVideoIsLoaded() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        var lookup = new TaskCompletionSource<ResolvedVideo>();
+        app.Playlists.YouTube.ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+
+        Assert.False(app.Form.Button("Play").Enabled); // nothing loaded at all yet
+
+        await app.ShowAsync();
+        await Async.WaitUntilAsync(() => app.Playback.IsStandby);
+
+        Assert.False(app.Playback.IsStandbyReady);
+        Assert.False(app.Form.Button("Play").Enabled);
+        Assert.DoesNotContain("Ready", app.TitleLabel.Text);
+
+        lookup.SetResult(PlaybackSetup.Resolved("a1"));
+        await Async.WaitUntilAsync(() => app.Playback.IsStandbyReady);
+
+        Assert.True(app.Form.Button("Play").Enabled);
+        Assert.Equal("Ready - press Play to start", app.TitleLabel.Text);
+    }, sta: true);
+
+    [Fact]
+    public void ThePlayPauseButton_PausesAndResumesTheVideo() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+
+        app.Form.Button("Pause").PerformClick();
+        Assert.True(app.Playback.IsPaused);
+        app.Player.Received(1).Pause();
+
+        app.Form.Button("Play").PerformClick();
+        Assert.False(app.Playback.IsPaused);
+        app.Player.Received(1).Resume();
+        Assert.Single(app.Form.All<Button>(), b => b.Text == "Pause");
     }, sta: true);
 
     [Fact]

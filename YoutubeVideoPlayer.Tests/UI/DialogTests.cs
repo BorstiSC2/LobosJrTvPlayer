@@ -6,6 +6,7 @@ using YouTubeVideoPlayer.Playlists;
 using YouTubeVideoPlayer.Tests.TestSupport;
 using YouTubeVideoPlayer.Twitch.Auth;
 using YouTubeVideoPlayer.UI;
+using YouTubeVideoPlayer.YouTube;
 using static YouTubeVideoPlayer.Tests.TestSupport.PlaylistSetup;
 
 namespace YouTubeVideoPlayer.Tests.UI;
@@ -43,17 +44,20 @@ public class PlaylistDialogTests
         using var _ = setup;
         using var dialog = new PlaylistDialog(manager).ShowHidden(); // the selection needs a window handle
 
-        // Columns: random order (a check box, no text), playlist, videos, last updated, status.
+        // Columns: random order (a check box, no text), videos, last updated, status (a symbol), playlist.
         var rows = List(dialog).Items.Cast<ListViewItem>().Select(i => i.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(s => s.Text).ToArray()).ToList();
 
-        Assert.Equal(new[] { "Random order", "Playlist", "Videos", "Last updated", "Status" }, List(dialog).Columns.Cast<ColumnHeader>().Select(c => c.Text));
+        Assert.Equal(new[] { "Random order", "Videos", "Last updated", "Status", "Playlist" }, List(dialog).Columns.Cast<ColumnHeader>().Select(c => c.Text));
         Assert.Equal(4, rows.Count);
-        Assert.Equal(new[] { "", "    All playlists", "", "", "" }, rows[0]);
-        Assert.Equal("▶ Alpha", rows[1][1]);
-        Assert.Equal("2", rows[1][2]);
-        Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToLocalTime().ToString("g"), rows[1][3]);
-        Assert.Equal("    Beta", rows[2][1]);
-        Assert.Equal("Failed: no such playlist", rows[3][4]);
+        Assert.Equal(new[] { "", "", "", "", "    All playlists" }, rows[0]);
+        Assert.Equal("▶ Alpha", rows[1][4]);
+        Assert.Equal("2", rows[1][1]);
+        Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToLocalTime().ToString("g"), rows[1][2]);
+        Assert.Equal("    Beta", rows[2][4]);
+        // Only symbols in the status column; the reason ("no such playlist") goes to the error log.
+        Assert.Equal(PlaylistDialog.SuccessIcon, rows[1][3]);
+        Assert.Equal(PlaylistDialog.ErrorIcon, rows[3][3]);
+        Assert.DoesNotContain(rows, row => row.Any(text => text.Contains("no such playlist")));
         Assert.Equal(Color.Firebrick, List(dialog).Items[3].ForeColor);
         Assert.True(List(dialog).Items[1].Selected); // the active playlist is preselected
     }, sta: true);
@@ -183,8 +187,8 @@ public class PlaylistDialogTests
         await manager.SelectAsync(null);
         using var dialog = new PlaylistDialog(manager);
 
-        Assert.Equal("▶ All playlists", List(dialog).Items[0].SubItems[1].Text);
-        Assert.Equal("3", List(dialog).Items[0].SubItems[2].Text);
+        Assert.Equal("▶ All playlists", List(dialog).Items[0].SubItems[4].Text);
+        Assert.Equal("3", List(dialog).Items[0].SubItems[1].Text);
     }, sta: true);
 
     [Fact]
@@ -195,7 +199,7 @@ public class PlaylistDialogTests
         using var dialog = new PlaylistDialog(manager).ShowHidden(); // selection events need a window handle
 
         SelectRow(dialog, 0); // "All playlists"
-        Assert.True(dialog.Button("Play").Enabled);
+        Assert.True(dialog.Button("Switch to playlist").Enabled);
         Assert.False(dialog.Button("Rename...").Enabled);
         Assert.False(dialog.Button("Remove").Enabled);
         Assert.False(dialog.Button("Update").Enabled);
@@ -207,7 +211,7 @@ public class PlaylistDialogTests
         Assert.True(dialog.Button("Update").Enabled);
 
         List(dialog).SelectedItems.Clear();
-        Assert.False(dialog.Button("Play").Enabled);
+        Assert.False(dialog.Button("Switch to playlist").Enabled);
     }, sta: true);
 
     [Fact]
@@ -218,7 +222,7 @@ public class PlaylistDialogTests
         using var dialog = new PlaylistDialog(manager).ShowHidden();
 
         SelectRow(dialog, 2);
-        dialog.Button("Play").PerformClick();
+        dialog.Button("Switch to playlist").PerformClick();
         await Async.WaitUntilAsync(() => dialog.IsDisposed || !dialog.Visible);
 
         Assert.Equal(IdB, manager.SelectedKey);
@@ -237,7 +241,99 @@ public class PlaylistDialogTests
         await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated"));
 
         Assert.Equal("Updated \"Beta\": +2 / −0 videos (3 in total).", Status(dialog).Text);
-        Assert.Equal("3", List(dialog).Items[2].SubItems[2].Text); // the list refreshed
+        Assert.Equal("3", List(dialog).Items[2].SubItems[1].Text); // the list refreshed
+    }, sta: true);
+
+    [Fact]
+    public void UpdateAll_ShowsTheLoadingSymbolForEveryPlaylistAtOnce_AndTheResultAsEachOneFinishes() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        var firstDownload = new TaskCompletionSource<IReadOnlyList<string>>();
+        setup.YouTube.GetPlaylistVideoIdsAsync(IdA, Arg.Any<CancellationToken>()).Returns(firstDownload.Task);
+        setup.OnYouTube(IdB, "b1");
+        setup.OnYouTube(IdC, "c1");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        string Symbol(int row) => List(dialog).Items[row].SubItems[3].Text;
+
+        dialog.Button("Update all").PerformClick();
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updating 1/3"));
+
+        // Beta and Unreachable have not been started yet, but already show that they are about to be updated.
+        Assert.Equal(PlaylistDialog.LoadingIcon, Symbol(0)); // all playlists
+        Assert.Equal(PlaylistDialog.LoadingIcon, Symbol(1));
+        Assert.Equal(PlaylistDialog.LoadingIcon, Symbol(2));
+        Assert.Equal(PlaylistDialog.LoadingIcon, Symbol(3));
+
+        firstDownload.SetResult(new[] { "a1", "a2" });
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated 3"));
+
+        Assert.Equal(string.Empty, Symbol(0));
+        Assert.All(new[] { 1, 2, 3 }, row => Assert.Equal(PlaylistDialog.SuccessIcon, Symbol(row)));
+    }, sta: true);
+
+    [Fact]
+    public void SeveralSelectedRows_OnlyAllowRemoveUpdateUpdateAllAndClose() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        Assert.True(List(dialog).MultiSelect);
+
+        SelectRow(dialog, 1);
+        List(dialog).Items[2].Selected = true; // like Ctrl+click: adds to the selection
+        Assert.Equal(2, List(dialog).SelectedItems.Count);
+
+        Assert.False(dialog.Button("Switch to playlist").Enabled);
+        Assert.False(dialog.Button("Add...").Enabled);
+        Assert.False(dialog.Button("Rename...").Enabled);
+        Assert.True(dialog.Button("Remove").Enabled);
+        Assert.True(dialog.Button("Update").Enabled);
+        Assert.True(dialog.Button("Update all").Enabled);
+        Assert.True(dialog.Button("Close").Enabled);
+
+        List(dialog).Items[2].Selected = false; // back to one row: everything is available again
+        Assert.True(dialog.Button("Switch to playlist").Enabled);
+        Assert.True(dialog.Button("Add...").Enabled);
+        Assert.True(dialog.Button("Rename...").Enabled);
+    }, sta: true);
+
+    [Fact]
+    public void RemovingSeveralSelectedPlaylists_RemovesThemAll() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        SelectRow(dialog, 2);
+        List(dialog).Items[3].Selected = true;
+        string? question = null;
+        Ui.AnswerNextMessageBox(DialogResult.Yes, text => question = text);
+
+        dialog.Button("Remove").PerformClick();
+        await Async.WaitUntilAsync(() => manager.Playlists.Count == 1);
+
+        Assert.Contains("these 2 playlists", question);
+        Assert.Equal("Alpha", manager.Playlists.Single().Title);
+        Assert.Equal("Removed 2 playlists.", Status(dialog).Text);
+    }, sta: true);
+
+    [Fact]
+    public void UpdatingSeveralSelectedPlaylists_UpdatesJustThose() => UiContext.Run(async () =>
+    {
+        var (setup, manager) = await LoadAsync(ThreePlaylists());
+        using var _ = setup;
+        setup.OnYouTube(IdA, "a1", "a2", "a3");
+        setup.OnYouTube(IdB, "b1");
+        using var dialog = new PlaylistDialog(manager).ShowHidden();
+        var downloadsOfC = setup.YouTube.ReceivedCalls().Count(c => c.GetArguments().Contains(IdC));
+        SelectRow(dialog, 1);
+        List(dialog).Items[2].Selected = true;
+
+        dialog.Button("Update").PerformClick();
+        await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated 2"));
+
+        Assert.Equal("Updated 2 playlist(s): +1 / −0 videos.", Status(dialog).Text);
+        Assert.Equal(downloadsOfC, setup.YouTube.ReceivedCalls().Count(c => c.GetArguments().Contains(IdC)));
     }, sta: true);
 
     [Fact]
@@ -256,7 +352,7 @@ public class PlaylistDialogTests
 
         Assert.Equal("Updated 3 playlist(s): +3 / −1 videos.", Status(dialog).Text);
         Assert.Equal(SystemColors.GrayText, Status(dialog).ForeColor);
-        Assert.Equal("2", List(dialog).Items[3].SubItems[2].Text);
+        Assert.Equal("2", List(dialog).Items[3].SubItems[1].Text);
     }, sta: true);
 
     [Fact]
@@ -277,7 +373,7 @@ public class PlaylistDialogTests
 
         Assert.Equal("Gamma", manager.Playlists[1].Title);
         Assert.Equal("Renamed to \"Gamma\".", Status(dialog).Text);
-        Assert.Equal("    Gamma", List(dialog).Items[2].SubItems[1].Text);
+        Assert.Equal("    Gamma", List(dialog).Items[2].SubItems[4].Text);
     }, sta: true);
 
     [Fact]
@@ -414,8 +510,8 @@ public class PlaylistDialogTests
         string? message = null;
         Ui.AnswerNextMessageBox(DialogResult.OK, text => message = text);
 
-        dialog.Button("Play").PerformClick();
-        await Async.WaitUntilAsync(() => message != null && dialog.Button("Play").Enabled, because: "the action finishes after the message box");
+        dialog.Button("Switch to playlist").PerformClick();
+        await Async.WaitUntilAsync(() => message != null && dialog.Button("Switch to playlist").Enabled, because: "the action finishes after the message box");
 
         Assert.Equal("no such playlist", message);
         Assert.Equal("no such playlist", Status(dialog).Text);
@@ -456,7 +552,7 @@ public class PlaylistDialogTests
         await Async.SettleAsync();
 
         Assert.Equal(3, manager.Playlists.Count);
-        Assert.Equal("Double-click a playlist to play it.", Status(dialog).Text);
+        Assert.Equal("Select a playlist and click \"Switch to playlist\" (or press Enter) to play it.", Status(dialog).Text);
     }, sta: true);
 
     [Fact]
@@ -470,7 +566,7 @@ public class PlaylistDialogTests
 
         dialog.Button("Rename...").PerformClick();
 
-        Assert.Equal("Double-click a playlist to play it.", Status(dialog).Text);
+        Assert.Equal("Select a playlist and click \"Switch to playlist\" (or press Enter) to play it.", Status(dialog).Text);
     }, sta: true);
 
     private static void PressKey(Control control, Keys key) =>
@@ -485,7 +581,7 @@ public class PlaylistDialogTests
         var dialog = new PlaylistDialog(manager).ShowHidden();
 
         manager.Rename(IdB, "Renamed elsewhere");
-        Assert.Equal("    Renamed elsewhere", List(dialog).Items[2].SubItems[1].Text);
+        Assert.Equal("    Renamed elsewhere", List(dialog).Items[2].SubItems[4].Text);
 
         dialog.Close();
         manager.Rename(IdB, "After close"); // must not touch the disposed dialog

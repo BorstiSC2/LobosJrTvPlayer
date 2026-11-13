@@ -87,6 +87,22 @@ namespace YouTubeVideoPlayer.Playback
             Enqueue(() => PlayCore(videoUrl, audioUrl));
         }
 
+        public void Pause()
+        {
+            if (_disposed)
+                return;
+
+            Enqueue(() => SetPauseCore(true));
+        }
+
+        public void Resume()
+        {
+            if (_disposed)
+                return;
+
+            Enqueue(() => SetPauseCore(false));
+        }
+
         public void Stop()
         {
             if (_disposed)
@@ -133,6 +149,21 @@ namespace YouTubeVideoPlayer.Playback
                 // No event follows a failed start, so report it; the playback manager moves on.
                 Logger.Log("Exception occured trying to play the media.", ex);
                 EncounteredError?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        private void SetPauseCore(bool pause)
+        {
+            if (_disposed)
+                return;
+
+            try
+            {
+                MediaPlayer.SetPause(pause);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log("Exception occured trying to " + (pause ? "pause" : "resume") + " the media.", ex);
             }
         }
 

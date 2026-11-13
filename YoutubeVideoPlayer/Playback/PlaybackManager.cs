@@ -40,6 +40,9 @@ namespace YouTubeVideoPlayer.Playback
         private long _failSafePlaybackTime = long.MinValue;
         private int _mediaGeneration;
         private bool _isBuffering;
+        private bool _isPaused;
+        private bool _isStandby;
+        private bool _standbyReady;
         private int _volume = 100;
         private bool _isMuted;
         private bool _disposed;
@@ -63,6 +66,7 @@ namespace YouTubeVideoPlayer.Playback
 
             // While a video plays, the next one is chosen and resolved, so the change has no gap.
             _prefetcher = new NextVideoPrefetcher(_youtube, _videoSource, () => _queuedVideoId, _time);
+            _prefetcher.PreparationFinished += (_, __) => OnPreparationFinished();
             _videoSource.SequenceChanged += OnSequenceChanged;
         }
 
@@ -124,6 +128,106 @@ namespace YouTubeVideoPlayer.Playback
         public void AdjustVolume(int delta) => Volume = _volume + delta;
 
         public void ToggleMute() => IsMuted = !_isMuted;
+
+        /// <summary>Whether the current video was paused with <see cref="Pause"/> and not resumed yet.</summary>
+        public bool IsPaused => _isPaused;
+
+        /// <summary>
+        /// Whether the first video is prepared but not started: <see cref="EnterStandby"/> was called and
+        /// nothing has played since. <see cref="PlayNextAsync"/> (or a skip) starts it.
+        /// </summary>
+        public bool IsStandby => _isStandby;
+
+        /// <summary>
+        /// Whether, while standing by, the first video has been looked up, so Play starts it at once. It is also
+        /// <c>true</c> if the lookup failed (Play then looks the video up again), so Play never stays blocked.
+        /// </summary>
+        public bool IsStandbyReady => _standbyReady;
+
+        /// <summary>Raised when <see cref="IsStandby"/>, <see cref="IsStandbyReady"/> or <see cref="IsPaused"/> changed.</summary>
+        public event EventHandler? StateChanged;
+
+        /// <summary>
+        /// Prepares the first video without playing it: it is picked and its streams are resolved in advance,
+        /// like the next video during playback, so <see cref="PlayNextAsync"/> starts it without a lookup.
+        /// Does nothing once a video was started.
+        /// </summary>
+        public void EnterStandby()
+        {
+            if (_disposed || Current != null || _isStandby)
+                return;
+
+            Logger.Log("Standing by: the first video is prepared, playback starts on request.");
+            SetState(standby: true, paused: false);
+            RestartPrefetch();
+        }
+
+        private void SetState(bool standby, bool paused)
+        {
+            var ready = standby && _standbyReady;
+            if (_isStandby == standby && _isPaused == paused && _standbyReady == ready)
+                return;
+
+            _isStandby = standby;
+            _isPaused = paused;
+            _standbyReady = ready;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void SetStandbyReady(bool ready)
+        {
+            if (_standbyReady == ready)
+                return;
+
+            _standbyReady = ready;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnPreparationFinished()
+        {
+            if (!_disposed && _isStandby && Current == null)
+                SetStandbyReady(true);
+        }
+
+        /// <summary>Prepares the video after the current one, or the first one while standing by.</summary>
+        private void RestartPrefetch()
+        {
+            if (Current != null)
+                _prefetcher.Start(Current.VideoId);
+            else if (_isStandby)
+            {
+                SetStandbyReady(false);
+                _prefetcher.StartFirst();
+            }
+            else
+                _prefetcher.Cancel();
+        }
+
+        /// <summary>
+        /// Pauses the current video. The watchdogs stand still meanwhile (a paused player is not "frozen"), and
+        /// the pause ends by itself when another video starts.
+        /// </summary>
+        public void Pause()
+        {
+            if (_disposed || _isPaused || Current == null)
+                return;
+
+            StopBufferingWatch();
+            _player.Pause();
+            SetState(standby: false, paused: true);
+        }
+
+        /// <summary>Continues a video paused with <see cref="Pause"/>; does nothing if it is not paused.</summary>
+        public void Resume()
+        {
+            if (_disposed || !_isPaused)
+                return;
+
+            _failSafeTriggered = false;
+            _failSafePlaybackTime = long.MinValue;
+            _player.Resume();
+            SetState(standby: false, paused: false);
+        }
 
         /// <summary>Stops the current video immediately and starts the next one.</summary>
         public Task SkipAsync()
@@ -191,20 +295,20 @@ namespace YouTubeVideoPlayer.Playback
             _queuedVideoId = videoId;
 
             // The queued video is the one to prepare, not whatever was chosen before.
-            _prefetcher.Start(Current?.VideoId);
+            RestartPrefetch();
         }
 
         /// <summary>Forgets a queued video, e.g. because the pool it came from was switched.</summary>
         public void ClearQueuedVideo()
         {
             _queuedVideoId = null;
-            _prefetcher.Start(Current?.VideoId);
+            RestartPrefetch();
         }
 
         private void OnSequenceChanged(object? sender, EventArgs e)
         {
             if (!_disposed)
-                _prefetcher.Start(Current?.VideoId);
+                RestartPrefetch();
         }
 
         /// <summary>
@@ -378,6 +482,7 @@ namespace YouTubeVideoPlayer.Playback
             Interlocked.Increment(ref _mediaGeneration);
             _failSafeTriggered = false;
             _failSafePlaybackTime = long.MinValue;
+            SetState(standby: false, paused: false);
 
             _player.Play(video.VideoUrl, video.AudioUrl);
 
@@ -431,7 +536,7 @@ namespace YouTubeVideoPlayer.Playback
         {
             // While an operation is resolving the next video the player is idle by design, and the
             // operation has its own retry loop. Cancelling it here would only restart a slow load.
-            if (_playNextTask != null)
+            if (_playNextTask != null || _isPaused)
             {
                 _failSafeTriggered = false;
                 return;

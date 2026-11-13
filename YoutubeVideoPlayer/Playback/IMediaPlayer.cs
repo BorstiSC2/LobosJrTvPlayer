@@ -31,6 +31,12 @@ namespace YouTubeVideoPlayer.Playback
         /// <param name="audioUrl">A separate audio stream played along with the video, or <c>null</c>.</param>
         void Play(string videoUrl, string? audioUrl);
 
+        /// <summary>Pauses the current media (it keeps its position). Does nothing if nothing is loaded.</summary>
+        void Pause();
+
+        /// <summary>Continues media that was paused with <see cref="Pause"/>.</summary>
+        void Resume();
+
         /// <summary>Stops playback and releases the current media. The call may return before playback has stopped.</summary>
         void Stop();
 

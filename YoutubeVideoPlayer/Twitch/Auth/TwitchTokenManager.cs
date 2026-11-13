@@ -13,7 +13,7 @@ namespace YouTubeVideoPlayer.Twitch.Auth
     /// Must be created and used on the UI thread; timer ticks are marshalled onto it.
     /// Refresh tokens are single use, so a new token is always saved before it is used.
     /// </remarks>
-    public sealed class TwitchTokenManager : IDisposable
+    public sealed class TwitchTokenManager : ITokenLifetime, IDisposable
     {
         private static readonly TimeSpan MinimumRefreshDelay = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(1);
@@ -57,6 +57,9 @@ namespace YouTubeVideoPlayer.Twitch.Auth
 
         /// <summary>The current token, or <c>null</c> if the bot is not signed in.</summary>
         public TwitchToken? Current { get; private set; }
+
+        /// <summary>How long the current token stays valid (negative once it has expired); <c>null</c> if not signed in.</summary>
+        public TimeSpan? RemainingValidity => Current == null ? null : Current.ExpiresAtUtc - UtcNow;
 
         /// <summary>A new token is available (after sign-in or refresh); reconnect with it.</summary>
         public event EventHandler<TwitchToken>? TokenChanged;

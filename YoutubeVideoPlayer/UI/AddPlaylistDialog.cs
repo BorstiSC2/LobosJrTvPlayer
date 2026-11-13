@@ -30,6 +30,8 @@ namespace YouTubeVideoPlayer.UI
             _playlists = playlists;
 
             Text = "Add playlist";
+            if (AppIcon.Instance is { } icon)
+                Icon = icon;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;

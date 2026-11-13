@@ -43,13 +43,14 @@ Click **Playlists** in the control bar to open the playlist dialog.
 
 | Action | What it does |
 |--------|--------------|
-| Play (double-click, Enter) | Plays the selected playlist (or **All playlists** combined) and closes the dialog |
+| Switch to playlist (green button, Enter) | Plays the selected playlist (or **All playlists** combined) and closes the dialog |
 | Add... | Paste a YouTube playlist link. The name is fetched from YouTube and pre-filled; you can change it before adding |
 | Rename... (F2) | Changes the name shown in the list |
 | Remove (Del) | Removes the playlist and its cached video list |
 | Update | Downloads the playlist's video list from YouTube again and shows how many videos were added/removed |
-| Update all | Updates every playlist one after another |
-| Random order (checkbox in the list) | Switches the playlist between random order and playlist order; saved with the playlist |
+| Update all | Updates every playlist one after another; the video keeps playing meanwhile. All playlists show ⟳ until their own update is done |
+| Select several rows (Shift+click, Ctrl+click) | Only Remove, Update, Update all and Close stay enabled; Remove and Update then apply to all selected playlists |
+| Random order (checkbox in the list; a double-click on a row toggles it too, it does not open the playlist) | Switches the playlist between random order and playlist order; saved with the playlist |
 
 Links to a single video that contain `&list=...` are accepted as well.
 
@@ -87,7 +88,7 @@ Change it in the **Playlists** dialog (the **Random order** column of the list h
 
 ### Loading behaviour
 
-- On startup the selected playlist is loaded first and playback starts. It is read from its cache; only a playlist that has never been loaded is downloaded from YouTube.
+- On startup the selected playlist is loaded first. The app opens **paused**: the first video is already looked up, and the **Play** button in the control bar starts it without delay (the same button pauses and continues the video later). It is read from its cache; only a playlist that has never been loaded is downloaded from YouTube.
 - All other playlists are loaded in the background one after another, so switching later is instant.
 - While a video plays, the next one is chosen and looked up in advance, so the change between two videos takes well under a second instead of several seconds of black screen. The choice is kept, so the video that was prepared is the one that plays.
 - Video lists are only downloaded again when you click **Update** / **Update all**. An update always fetches the complete list; if it fails, the previous list stays in use.
@@ -105,13 +106,16 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
 | `!shufflestatus` | privileged | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
+| `!token` | privileged | Tells how long the bot's current access token stays valid (the token itself is never posted) |
 | `!skipvote` | privileged | Starts a vote: the bot posts 3 videos from the current playlist (random ones, or the next episodes if it plays in order); 2 minutes after the last option the winner plays |
 | `!vote <n>` | everyone | Votes for option *n* of the running vote (one vote per user; voting again replaces it) |
 | `!cancelvote` | privileged | Cancels the running vote; the current video keeps playing |
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!shufflestatus` and `!toggleshuffle` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!skip`, `!shufflestatus`, `!toggleshuffle` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+
+The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
 ### Skip votes
 

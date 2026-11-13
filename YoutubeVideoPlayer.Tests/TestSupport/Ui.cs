@@ -35,13 +35,21 @@ public static class Ui
     /// Answers the next <see cref="MessageBox"/> of this thread with <paramref name="result"/> and reports its text.
     /// The button command is posted to the box as a window message, so neither keyboard nor focus is involved.
     /// </summary>
-    public static void AnswerNextMessageBox(DialogResult result, Action<string>? onText = null)
+    public static void AnswerNextMessageBox(DialogResult result, Action<string>? onText = null) =>
+        AnswerMessageBoxes((result, onText));
+
+    /// <summary>
+    /// Answers the next message boxes of this thread one after the other (a box that is still closing is not answered twice).
+    /// </summary>
+    public static void AnswerMessageBoxes(params (DialogResult Result, Action<string>? OnText)[] answers)
     {
         const uint WM_COMMAND = 0x0111;
         const uint WM_CLOSE = 0x0010;
         const int MessageTextId = 0xFFFF;
         var threadId = NativeMethods.GetCurrentThreadId();
         var timer = new System.Windows.Forms.Timer { Interval = 20 };
+        var next = 0;
+        var previous = IntPtr.Zero;
         timer.Tick += (_, _) =>
         {
             var box = IntPtr.Zero;
@@ -56,11 +64,17 @@ public static class Ui
                 return false;
             }, IntPtr.Zero);
 
-            if (box == IntPtr.Zero)
+            if (box == IntPtr.Zero || box == previous)
                 return;
 
-            timer.Stop();
-            timer.Dispose();
+            previous = box;
+            var (result, onText) = answers[next++];
+            if (next == answers.Length)
+            {
+                timer.Stop();
+                timer.Dispose();
+            }
+
             var text = new System.Text.StringBuilder(4096);
             NativeMethods.GetDlgItemText(box, MessageTextId, text, text.Capacity);
             onText?.Invoke(text.ToString());

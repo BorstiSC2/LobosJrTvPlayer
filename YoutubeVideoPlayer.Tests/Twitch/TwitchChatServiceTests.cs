@@ -200,6 +200,87 @@ public class TwitchChatServiceTests
         await chat.SendMessageAsync("hello");
     });
 
+    private static Task WaitForMessageAsync(ITwitchClient client, string message) =>
+        Async.WaitUntilAsync(() => client.ReceivedCalls().Any(c =>
+            c.GetMethodInfo().Name == nameof(ITwitchClient.SendMessageAsync) && (string)c.GetArguments()[1]! == message));
+
+    [Fact]
+    public void Connected_PostsTheInitialMessage_AndAReconnectMessageAfterALostConnection() => UiContext.Run(async () =>
+    {
+        var client = Substitute.For<ITwitchClient>();
+        var chat = new TwitchChatService(ManualSettings, null, client);
+        await chat.StartAsync();
+
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
+
+        // After a dropped connection the bot says it is back; the join that follows the reconnect adds nothing.
+        Disconnected(client);
+        await Async.SettleAsync();
+        Raise<TwitchLib.Client.Events.OnConnectedEventArgs>(client, (c, h) => c.OnReconnected += h, new TwitchLib.Client.Events.OnConnectedEventArgs("lobosbot"));
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ReconnectedMessage);
+        await Async.SettleAsync();
+
+        Assert.Equal(2, client.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ITwitchClient.SendMessageAsync)));
+        await client.Received(1).SendMessageAsync("lobosjr", TwitchChatService.ConnectedMessage, Arg.Any<bool>());
+        await client.Received(1).SendMessageAsync("lobosjr", TwitchChatService.ReconnectedMessage, Arg.Any<bool>());
+    });
+
+    [Fact]
+    public void AppSignIn_ARenewedTokenDoesNotGreetAgain() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Substitute.For<ITwitchClient>();
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
+        await chat.StartAsync();
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
+        client.IsConnected.Returns(true);
+        client.ClearReceivedCalls();
+
+        await tokens.Manager.RefreshAsync();
+        await Async.WaitUntilAsync(() => client.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITwitchClient.ConnectAsync)));
+        Joined(client);
+        await Async.SettleAsync();
+
+        Assert.Equal(TwitchConnectionState.Connected, chat.State);
+        await client.DidNotReceive().SendMessageAsync(Arg.Any<string>(), TwitchChatService.ConnectedMessage, Arg.Any<bool>());
+        await client.DidNotReceive().SendMessageAsync(Arg.Any<string>(), TwitchChatService.ReconnectedMessage, Arg.Any<bool>());
+    });
+
+    [Fact]
+    public void Dispose_WhileConnected_SaysGoodbyeBeforeDisconnecting() => UiContext.Run(async () =>
+    {
+        var client = Substitute.For<ITwitchClient>();
+        var chat = new TwitchChatService(ManualSettings, null, client);
+        await chat.StartAsync();
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
+        client.IsConnected.Returns(true);
+        client.ClearReceivedCalls();
+
+        await chat.DisposeAsync();
+
+        Received.InOrder(() =>
+        {
+            client.SendMessageAsync("lobosjr", TwitchChatService.GoodbyeMessage, Arg.Any<bool>());
+            client.DisconnectAsync();
+        });
+    });
+
+    [Fact]
+    public void Dispose_WhileNotConnected_SaysNothing() => UiContext.Run(async () =>
+    {
+        var client = Substitute.For<ITwitchClient>();
+        var chat = new TwitchChatService(ManualSettings, null, client);
+        await chat.StartAsync();
+
+        await chat.DisposeAsync();
+
+        await client.DidNotReceive().SendMessageAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>());
+    });
+
     [Fact]
     public void Dispose_DisconnectsAndIgnoresLaterEvents() => UiContext.Run(async () =>
     {

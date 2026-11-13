@@ -78,6 +78,7 @@ namespace YouTubeVideoPlayer
                         new SkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new ToggleShuffleCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
+                        new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new SkipVoteCommand(votes),
                         new CancelVoteCommand(votes),
                         new VoteCommand(votes)

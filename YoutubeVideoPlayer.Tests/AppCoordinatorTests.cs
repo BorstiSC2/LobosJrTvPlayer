@@ -70,15 +70,25 @@ public class AppCoordinatorTests
     }
 
     [Fact]
-    public void Start_LoadsThePlaylistsAndStartsPlayback() => UiContext.Run(async () =>
+    public void Start_LoadsThePlaylists_AndStandsByWithTheFirstVideoPrepared() => UiContext.Run(async () =>
     {
         using var app = new App(new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1"));
 
         await app.Coordinator.StartAsync();
-        await app.NextVideoDelayAsync();
+        await Async.SettleAsync();
+
+        // The app opens paused: nothing plays, but the first video is already looked up.
+        Assert.True(app.Playback.IsStandby);
+        Assert.Empty(app.Played());
+        await app.PlaylistSetup.YouTube.Received(1).ResolveAsync("a1", Arg.Any<CancellationToken>());
+        Assert.Equal(0, app.NoVideosReports);
+
+        // Play starts it at once: no one-second wait and no second lookup.
+        await app.Playback.PlayNextAsync();
 
         Assert.Equal(new[] { "a1" }, app.Played());
-        Assert.Equal(0, app.NoVideosReports);
+        Assert.False(app.Playback.IsStandby);
+        await app.PlaylistSetup.YouTube.Received(1).ResolveAsync("a1", Arg.Any<CancellationToken>());
     });
 
     [Fact]
@@ -118,14 +128,16 @@ public class AppCoordinatorTests
     });
 
     [Fact]
-    public void AddingTheFirstPlaylist_StartsPlayback() => UiContext.Run(async () =>
+    public void AddingTheFirstPlaylist_PreparesItsFirstVideo_AndPlayStartsIt() => UiContext.Run(async () =>
     {
         using var app = new App(new PlaylistSetup().OnYouTube(IdA, "a1"));
         await app.Coordinator.StartAsync();
         Assert.Equal(1, app.NoVideosReports);
 
         await app.Playlists.AddAsync("A", Url(IdA));
-        await app.NextVideoDelayAsync();
+        await Async.SettleAsync();
+        Assert.True(app.Playback.IsStandby);
+        await app.Playback.PlayNextAsync();
 
         Assert.Equal(new[] { "a1" }, app.Played());
     });

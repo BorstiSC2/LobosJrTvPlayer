@@ -38,6 +38,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly Label _twitchStatusLabel;
         private readonly TrackBar _volumeSlider;
         private readonly Button _muteButton;
+        private readonly Button _playPauseButton;
         private readonly CheckBox _autoVoteCheckBox;
         private readonly ToolTip _toolTip = new();
         private readonly WindowModeController _windowModes;
@@ -144,6 +145,7 @@ namespace YouTubeVideoPlayer.UI
                     : "Needs the Twitch bot (see twitchsettings.json).");
             _controlPanel.Controls.Add(_autoVoteCheckBox);
 
+            _playPauseButton = AddControlButton("Play", (_, __) => TogglePlayPause());
             AddControlButton("Playlists", (_, __) => ShowPlaylistDialog());
             AddControlButton("Next", (_, __) => _playback.SkipAsync().FireAndForget("Skipping via the Next button failed."));
             AddControlButton("Fullscreen", (_, __) => _windowModes!.ToggleFullscreen());
@@ -194,11 +196,13 @@ namespace YouTubeVideoPlayer.UI
             SubscribeToManagers();
             UpdateTwitchStatus();
             UpdateMuteButtonAppearance();
+            UpdatePlayPauseButton();
         }
 
         private void SubscribeToManagers()
         {
             _playback.LoadingStarted += OnLoadingStarted;
+            _playback.StateChanged += OnPlaybackStateChanged;
             _playback.NowPlayingChanged += OnNowPlayingChanged;
             _playback.BufferingChanged += OnBufferingChanged;
             _playback.VolumeChanged += OnVolumeChanged;
@@ -211,6 +215,7 @@ namespace YouTubeVideoPlayer.UI
         private void UnsubscribeFromManagers()
         {
             _playback.LoadingStarted -= OnLoadingStarted;
+            _playback.StateChanged -= OnPlaybackStateChanged;
             _playback.NowPlayingChanged -= OnNowPlayingChanged;
             _playback.BufferingChanged -= OnBufferingChanged;
             _playback.VolumeChanged -= OnVolumeChanged;
@@ -242,11 +247,33 @@ namespace YouTubeVideoPlayer.UI
             return label;
         }
 
-        private void AddControlButton(string text, EventHandler onClick)
+        private Button AddControlButton(string text, EventHandler onClick)
         {
             var button = new Button { Text = text, Dock = DockStyle.Right, Width = 100, Height = 40 };
             button.Click += onClick;
             _controlPanel.Controls.Add(button);
+            return button;
+        }
+
+        /// <summary>Starts the prepared first video, pauses the playing video, or continues a paused one.</summary>
+        private void TogglePlayPause()
+        {
+            if (_playback.IsStandby)
+                _playback.PlayNextAsync().FireAndForget("Starting playback via the Play button failed.");
+            else if (_playback.IsPaused)
+                _playback.Resume();
+            else
+                _playback.Pause();
+        }
+
+        /// <summary>
+        /// "Play" while standing by or paused, "Pause" while a video plays. Disabled until there is something to
+        /// start or pause: the prepared first video, or a video that has been loaded.
+        /// </summary>
+        private void UpdatePlayPauseButton()
+        {
+            _playPauseButton.Text = _playback.IsStandby || _playback.IsPaused || _playback.Current == null ? "Play" : "Pause";
+            _playPauseButton.Enabled = _playback.IsStandby ? _playback.IsStandbyReady : _playback.Current != null;
         }
 
         private void UpdateTitleLabelPosition()
@@ -287,7 +314,18 @@ namespace YouTubeVideoPlayer.UI
 
         private void OnLoadingStarted(object? sender, EventArgs e) => ShowTitle("Loading next video...");
 
-        private void OnNowPlayingChanged(object? sender, NowPlaying nowPlaying) => ShowTitle(nowPlaying.Title);
+        private void OnPlaybackStateChanged(object? sender, EventArgs e)
+        {
+            UpdatePlayPauseButton();
+            if (_playback.IsStandby)
+                ShowTitle(_playback.IsStandbyReady ? "Ready - press Play to start" : "Loading first video...");
+        }
+
+        private void OnNowPlayingChanged(object? sender, NowPlaying nowPlaying)
+        {
+            ShowTitle(nowPlaying.Title);
+            UpdatePlayPauseButton();
+        }
 
         private void OnBufferingChanged(object? sender, bool isBuffering)
         {

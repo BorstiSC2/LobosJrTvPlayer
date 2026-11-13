@@ -34,6 +34,8 @@ namespace YouTubeVideoPlayer.UI
             _expectedBotLogin = expectedBotLogin.Trim().ToLowerInvariant();
 
             Text = "Connect Twitch bot";
+            if (AppIcon.Instance is { } icon)
+                Icon = icon;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;
