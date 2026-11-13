@@ -396,7 +396,7 @@ public class VideoPlayerFormTests
     [Fact]
     public void WithTwitch_TheCheckboxSwitchesTheAutovoteOnAndOff() => UiContext.Run(() =>
     {
-        using var app = new App(Substitute.For<ITwitchClient>());
+        using var app = new App(Chat.Client());
         var checkBox = app.AutoVoteCheckBox;
 
         Assert.True(checkBox.Enabled);
@@ -413,7 +413,7 @@ public class VideoPlayerFormTests
     [Fact]
     public void WhenTheAutovoteIsSwitchedThroughChat_TheCheckboxFollows() => UiContext.Run(() =>
     {
-        using var app = new App(Substitute.For<ITwitchClient>());
+        using var app = new App(Chat.Client());
 
         app.AutoVote!.Enabled = true;
         Assert.True(app.AutoVoteCheckBox.Checked);
@@ -425,7 +425,7 @@ public class VideoPlayerFormTests
     [Fact]
     public void TheCheckboxSitsInTheControlBar_NextToTheButtons() => UiContext.Run(async () =>
     {
-        using var app = new App(Substitute.For<ITwitchClient>());
+        using var app = new App(Chat.Client());
         app.Form.ShowHidden();
         await Async.SettleAsync();
 
@@ -454,7 +454,7 @@ public class VideoPlayerFormTests
     [Fact]
     public void TheStatusFollowsTheConnection() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         using var app = new App(client);
 
         await app.Twitch!.StartAsync();
@@ -481,7 +481,7 @@ public class VideoPlayerFormTests
         var auth = Substitute.For<ITwitchAuthClient>();
         auth.StartDeviceFlowAsync(Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource<DeviceCodeInfo>().Task);
         using var tokens = new TwitchTokenManager(auth, new TwitchTokenStore(dir.Path));
-        using var app = new App(Substitute.For<ITwitchClient>(), tokens, new TwitchSettings { ClientId = "cid", Channel = "lobosjr" });
+        using var app = new App(Chat.Client(), tokens, new TwitchSettings { ClientId = "cid", Channel = "lobosjr" });
 
         await app.Twitch!.StartAsync();
 

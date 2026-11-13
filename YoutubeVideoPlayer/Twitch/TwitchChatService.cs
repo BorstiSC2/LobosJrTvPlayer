@@ -33,6 +33,10 @@ namespace YouTubeVideoPlayer.Twitch
         private readonly SynchronizationContext _context;
         private readonly ITwitchClient _client;
         private readonly SemaphoreSlim _connectGate = new(1, 1);
+        private readonly ContextTimer _reconnectTimer;
+        private readonly TimeProvider _time;
+        private (string Login, string AccessToken)? _reconnect;
+        private int _reconnectAttempts;
         private bool _started;
         private bool _initialized;
         private bool _loginRetried;
@@ -53,16 +57,25 @@ namespace YouTubeVideoPlayer.Twitch
         internal const string GoodbyeMessage = "Vod-Bot is going offline. See you next time!";
 
         /// <summary>How long the goodbye gets to leave TwitchLib's send queue before the connection is closed.</summary>
-        private static readonly TimeSpan GoodbyeFlushDelay = TimeSpan.FromMilliseconds(500);
+        internal static readonly TimeSpan GoodbyeFlushDelay = TimeSpan.FromMilliseconds(500);
+
+        /// <summary>Wait before the first new attempt after a connect failed; it doubles with every further failure.</summary>
+        internal static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(15);
+
+        /// <summary>The longest wait between two connect attempts.</summary>
+        internal static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromMinutes(5);
 
         /// <param name="tokens">The app sign-in; <c>null</c> to use the manual token from the settings.</param>
         /// <param name="client">The TwitchLib client; a new <see cref="TwitchClient"/> by default.</param>
-        public TwitchChatService(TwitchSettings settings, TwitchTokenManager? tokens, ITwitchClient? client = null)
+        /// <param name="timeProvider">The clock for the retry after a failed connect and for the goodbye; <see cref="TimeProvider.System"/> by default.</param>
+        public TwitchChatService(TwitchSettings settings, TwitchTokenManager? tokens, ITwitchClient? client = null, TimeProvider? timeProvider = null)
         {
             _settings = settings;
             _tokens = tokens;
             _context = SynchronizationContext.Current
                 ?? throw new InvalidOperationException("TwitchChatService must be created on the UI thread.");
+            _time = timeProvider ?? TimeProvider.System;
+            _reconnectTimer = new ContextTimer(_context, ReconnectDelay, periodic: false, OnReconnectDue, _time);
 
             _client = client ?? new TwitchClient();
             _client.OnJoinedChannel += OnJoinedChannelAsync;
@@ -145,8 +158,30 @@ namespace YouTubeVideoPlayer.Twitch
                 if (_disposed)
                     return;
 
+                // This attempt replaces a retry that is still waiting (e.g. a renewed token arrived meanwhile).
+                _reconnectTimer.Stop();
+                _reconnect = null;
+
                 BotLogin = login;
-                var credentials = new ConnectionCredentials(login, accessToken);
+
+                ConnectionCredentials credentials;
+                try
+                {
+                    credentials = new ConnectionCredentials(login, accessToken);
+                }
+                catch (Exception ex)
+                {
+                    // A name or token that TwitchLib refuses will not be accepted next time either: no retry.
+                    Logger.Log("TwitchLib does not accept the Twitch credentials.", ex);
+                    SetState(TwitchConnectionState.Disconnected);
+                    return;
+                }
+
+                // TwitchLib joins the channel it was initialized with only on the very first connect (it takes it
+                // from a queue that is then empty) and forgets it when a connection is closed. After the bot has
+                // been in the channel once, every further connect has to join it by hand; without that the bot
+                // reaches the chat server but never receives or sends anything (and stays on "Connecting").
+                var mustJoinChannel = _hasConnected;
 
                 if (_client.IsConnected)
                 {
@@ -169,18 +204,53 @@ namespace YouTubeVideoPlayer.Twitch
                 Logger.Log($"Connecting to Twitch chat #{_settings.Channel} as {login}...");
 
                 // Run outside the UI context; TwitchLib does not need it and must not block it.
-                await Task.Run(() => _client.ConnectAsync());
+                // It reports a connection that could not be opened (no network, Twitch unreachable) with
+                // false, not with an exception, and then raises no event either.
+                var connected = await Task.Run(() => _client.ConnectAsync());
+                if (!connected)
+                    throw new InvalidOperationException("The connection to the Twitch chat server could not be opened.");
+
+                if (mustJoinChannel)
+                    await Task.Run(() => _client.JoinChannelAsync(_settings.Channel));
             }
             catch (Exception ex)
             {
                 Logger.Log("Connecting to Twitch failed.", ex);
                 _quietReconnect = false;
                 SetState(TwitchConnectionState.Disconnected);
+                ScheduleReconnect(login, accessToken);
             }
             finally
             {
                 _connectGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Nothing else would connect again after a failed attempt (TwitchLib only reconnects a connection that
+        /// was established), so try again after a pause that doubles with every failure.
+        /// </summary>
+        private void ScheduleReconnect(string login, string accessToken)
+        {
+            if (_disposed)
+                return;
+
+            var delay = ReconnectDelay * Math.Pow(2, Math.Min(_reconnectAttempts, 10));
+            if (delay > MaxReconnectDelay)
+                delay = MaxReconnectDelay;
+
+            _reconnectAttempts++;
+            _reconnect = (login, accessToken);
+            Logger.Log($"Trying to connect to Twitch again in {delay.TotalSeconds:0} seconds.");
+            _reconnectTimer.Start(delay);
+        }
+
+        private void OnReconnectDue()
+        {
+            if (_disposed || _reconnect is not { } credentials)
+                return;
+
+            ConnectAsync(credentials.Login, credentials.AccessToken).FireAndForget("Connecting to Twitch again failed.");
         }
 
         private void OnTokenChanged(object? sender, TwitchToken token)
@@ -194,6 +264,10 @@ namespace YouTubeVideoPlayer.Twitch
 
         private void OnSignInRequired(object? sender, EventArgs e)
         {
+            // The credentials of a waiting retry are revoked.
+            _reconnectTimer.Stop();
+            _reconnect = null;
+
             SetState(TwitchConnectionState.SignInRequired);
             DisconnectAsync().FireAndForget("Disconnecting from Twitch failed.");
         }
@@ -302,6 +376,8 @@ namespace YouTubeVideoPlayer.Twitch
 
             if (state == TwitchConnectionState.Connected)
             {
+                _reconnectAttempts = 0;
+
                 // Joining and reconnecting both end up here; only the first change to Connected announces itself.
                 var quiet = _quietReconnect;
                 var initial = !_hasConnected;
@@ -333,10 +409,11 @@ namespace YouTubeVideoPlayer.Twitch
             if (State == TwitchConnectionState.Connected)
             {
                 await SendMessageAsync(GoodbyeMessage);
-                await Task.Delay(GoodbyeFlushDelay);
+                await Task.Delay(GoodbyeFlushDelay, _time);
             }
 
             _disposed = true;
+            _reconnectTimer.Dispose();
             if (_tokens != null)
             {
                 _tokens.TokenChanged -= OnTokenChanged;

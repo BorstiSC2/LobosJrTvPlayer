@@ -79,6 +79,37 @@ public class LoggerTests
     }
 
     [Fact]
+    public void LogAndClear_DoNotThrowWhileAnotherProgramHoldsTheFile()
+    {
+        // The log is written from catch blocks and async void handlers: an exception there would end the application.
+        using var log = new RedirectedLog();
+        File.WriteAllText(log.Path, "existing" + Environment.NewLine);
+
+        using (new FileStream(log.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Logger.Log("while locked");
+            Logger.Log("while locked", new InvalidOperationException("while locked"));
+            Logger.Clear();
+        }
+
+        Assert.Equal("existing" + Environment.NewLine, log.Content);
+
+        Logger.Log("after");
+        Assert.Contains("after", log.Content);
+    }
+
+    [Fact]
+    public void Log_DoesNotThrowIfThePathIsNotAFile()
+    {
+        using var log = new RedirectedLog();
+        Directory.CreateDirectory(log.Path);
+
+        Logger.Log("nowhere to go");
+        Logger.Log("nowhere to go", new InvalidOperationException("nowhere to go"));
+        Logger.Clear();
+    }
+
+    [Fact]
     public void Log_StopsWritingOnceTheFileReachesFiveMegabytes()
     {
         using var log = new RedirectedLog();

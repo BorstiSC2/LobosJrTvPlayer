@@ -30,7 +30,7 @@ public class AutoVoteManagerTests
             Videos.GetNextVideoIds(Arg.Any<int>(), Arg.Any<string?>())
                 .Returns(call => new[] { "a", "b", "c", "d", "e", "f" }.Take(call.ArgAt<int>(0)).ToList());
             YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(call => new YouTubeVideoDetails("Title " + call.ArgAt<string>(0), null));
+                .Returns(call => TitleAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)));
 
             Votes = new SkipVoteManager(
                 Chat, Playback, Videos, YouTube, voteDuration ?? TimeSpan.FromMinutes(2), SkipVoteManager.OptionCount, Time, new Random(1));
@@ -38,6 +38,17 @@ public class AutoVoteManagerTests
         }
 
         public FakeTimeProvider Time { get; } = new();
+
+        /// <summary>How long (on the fake clock) every title lookup takes.</summary>
+        public TimeSpan LookupDelay { get; set; }
+
+        private async Task<YouTubeVideoDetails> TitleAsync(string id, CancellationToken cancellationToken)
+        {
+            if (LookupDelay > TimeSpan.Zero)
+                await Task.Delay(LookupDelay, Time, cancellationToken);
+
+            return new YouTubeVideoDetails("Title " + id, null);
+        }
 
         public IChatChannel Chat { get; }
 
@@ -228,6 +239,45 @@ public class AutoVoteManagerTests
 
         Assert.False(setup.Votes.IsRunning);
         Assert.Empty(setup.Sent);
+    });
+
+    [Fact]
+    public void SlowOptionLookups_ComeOutOfTheCountdown_SoTheVoteStillEndsBeforeTheVideoDoes() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup { LookupDelay = TimeSpan.FromSeconds(8) };
+        setup.Remaining(TimeSpan.FromSeconds(60));
+        var start = setup.Time.GetUtcNow();
+
+        setup.AutoVote.Enabled = true;
+        for (var i = 0; i < 80 && setup.QueuedVideo() == null; i++)
+        {
+            setup.Time.Advance(TimeSpan.FromSeconds(1));
+            await Async.SettleAsync();
+        }
+
+        // The video ends after 60 s and the vote has to be over 10 s before that. Without the lookup time taken
+        // out of the countdown the winner is only known after 8 + 6 + 44 = 58 s.
+        Assert.NotNull(setup.QueuedVideo());
+        Assert.True(setup.Time.GetUtcNow() - start <= TimeSpan.FromSeconds(55), "the vote ended too late");
+    });
+
+    [Fact]
+    public void IfTheLookupTakesTooLong_NoVoteStartsAtAll() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup { LookupDelay = TimeSpan.FromSeconds(15) };
+        setup.Remaining(TimeSpan.FromSeconds(40)); // fine at first: 40 - 16 = 24 s
+
+        setup.AutoVote.Enabled = true;
+        for (var i = 0; i < 25; i++)
+        {
+            setup.Time.Advance(TimeSpan.FromSeconds(1));
+            await Async.SettleAsync();
+        }
+
+        // 15 s are gone before the options are known: too little is left for a vote of at least 15 s.
+        Assert.False(setup.Votes.IsRunning);
+        Assert.Empty(setup.Sent);
+        Assert.Null(setup.QueuedVideo());
     });
 
     [Fact]

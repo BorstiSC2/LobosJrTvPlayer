@@ -12,7 +12,7 @@ namespace YouTubeVideoPlayer.UI
     /// Signs the bot in with Twitch's device code flow: shows a code that the user confirms on
     /// twitch.tv/activate while logged in as the bot account.
     /// </summary>
-    public sealed class TwitchLoginDialog : Form
+    public sealed class TwitchLoginDialog : DialogForm
     {
         private readonly TwitchTokenManager _tokens;
         private readonly string _expectedBotLogin;
@@ -28,22 +28,10 @@ namespace YouTubeVideoPlayer.UI
         private DeviceCodeInfo? _device;
         private DateTime _expiresAtUtc;
 
-        public TwitchLoginDialog(TwitchTokenManager tokens, string expectedBotLogin)
+        public TwitchLoginDialog(TwitchTokenManager tokens, string expectedBotLogin) : base("Connect Twitch bot", padding: 14)
         {
             _tokens = tokens;
             _expectedBotLogin = expectedBotLogin.Trim().ToLowerInvariant();
-
-            Text = "Connect Twitch bot";
-            if (AppIcon.Instance is { } icon)
-                Icon = icon;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
-            MinimizeBox = false;
-            MaximizeBox = false;
-            ShowInTaskbar = false;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(14);
 
             var layout = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill };
 
@@ -95,16 +83,7 @@ namespace YouTubeVideoPlayer.UI
             _retryButton = new Button { Text = "New code", AutoSize = true, Visible = false };
             _retryButton.Click += (_, __) => StartSignIn();
             _closeButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
-            var bottomButtons = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 12, 0, 0)
-            };
-            bottomButtons.Controls.Add(_closeButton);
-            bottomButtons.Controls.Add(_retryButton);
-            layout.Controls.Add(bottomButtons);
+            layout.Controls.Add(CreateButtonRow(12, _closeButton, _retryButton));
 
             Controls.Add(layout);
             CancelButton = _closeButton;

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using YoutubeExplode;
+using YoutubeExplode.Videos;
 using YoutubeExplode.Videos.Streams;
 using YouTubeVideoPlayer.Infrastructure;
 
@@ -29,11 +30,24 @@ namespace YouTubeVideoPlayer.YouTube
         {
             var url = ToUrl(videoIdOrUrl);
 
-            // Get video metadata (to show title) and resolve stream manifest
-            var video = await _yt.Videos.GetAsync(url, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            // Video metadata (to show the title) and the stream manifest do not depend on each other, and each is a
+            // round trip to YouTube of a second or more, so both are asked for at the same time.
+            var manifestTask = _yt.Videos.Streams.GetManifestAsync(url, cancellationToken).AsTask();
 
-            var manifest = await _yt.Videos.Streams.GetManifestAsync(url, cancellationToken);
+            Video video;
+            StreamManifest manifest;
+            try
+            {
+                video = await _yt.Videos.GetAsync(url, cancellationToken);
+                manifest = await manifestTask;
+            }
+            catch
+            {
+                // The manifest request may still be running; a failure of it must not go unobserved.
+                _ = manifestTask.ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                throw;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
 
             var streams = SelectStreams(manifest, videoIdOrUrl);

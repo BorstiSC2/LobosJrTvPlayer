@@ -54,7 +54,8 @@ namespace YouTubeVideoPlayer.UI
             }
             else
             {
-                _controlPanel.Visible = true;
+                // Fullscreen may have been entered from borderless mode, which has no control bar either.
+                _controlPanel.Visible = !IsBorderless;
                 _form.FormBorderStyle = _fullscreenPrevBorderStyle;
                 _form.WindowState = _fullscreenPrevWindowState;
                 _form.TopMost = _fullscreenPrevTopMost;
@@ -67,6 +68,11 @@ namespace YouTubeVideoPlayer.UI
 
         public void ToggleBorderless()
         {
+            // Fullscreen is left first, back to the window it started from. Borderless would otherwise remember the
+            // fullscreen window as the one to return to (and the other way round).
+            if (IsFullscreen)
+                ToggleFullscreen();
+
             if (!IsBorderless)
                 EnterBorderless();
             else

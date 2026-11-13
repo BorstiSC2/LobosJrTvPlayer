@@ -11,7 +11,7 @@ namespace YouTubeVideoPlayer.UI
     /// Asks for a YouTube playlist link. As soon as a valid link is entered, the playlist name is
     /// fetched from YouTube and pre-filled; the user can change it before confirming.
     /// </summary>
-    public sealed class AddPlaylistDialog : Form
+    public sealed class AddPlaylistDialog : DialogForm
     {
         private const int LookupDelayMs = 500;
 
@@ -25,21 +25,9 @@ namespace YouTubeVideoPlayer.UI
         private YouTubePlaylistDetails? _details;
         private string? _autoFilledName;
 
-        public AddPlaylistDialog(PlaylistManager playlists)
+        public AddPlaylistDialog(PlaylistManager playlists) : base("Add playlist")
         {
             _playlists = playlists;
-
-            Text = "Add playlist";
-            if (AppIcon.Instance is { } icon)
-                Icon = icon;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
-            MinimizeBox = false;
-            MaximizeBox = false;
-            ShowInTaskbar = false;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(12);
 
             var layout = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -63,16 +51,7 @@ namespace YouTubeVideoPlayer.UI
 
             _okButton = new Button { Text = "Add", DialogResult = DialogResult.OK, AutoSize = true, Enabled = false };
             var cancelButton = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-            var buttons = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 10, 0, 0)
-            };
-            buttons.Controls.Add(cancelButton);
-            buttons.Controls.Add(_okButton);
-            layout.Controls.Add(buttons, 1, 3);
+            layout.Controls.Add(CreateButtonRow(10, cancelButton, _okButton), 1, 3);
 
             Controls.Add(layout);
             AcceptButton = _okButton;

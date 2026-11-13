@@ -93,11 +93,67 @@ public class WindowModeControllerTests
         Assert.True(window.Controller.LeaveCurrentMode());
         Assert.False(window.Controller.IsFullscreen);
         Assert.True(window.Controller.IsBorderless);
+        Assert.False(window.ControlPanel.Visible); // borderless has no control bar, also after fullscreen was left
 
         Assert.True(window.Controller.LeaveCurrentMode());
         Assert.False(window.Controller.IsBorderless);
+        Assert.True(window.ControlPanel.Visible);
 
         Assert.False(window.Controller.LeaveCurrentMode());
         Assert.Equal(window.OriginalBounds, window.Form.Bounds);
+    }, sta: true);
+
+    [Fact]
+    public void Fullscreen_ThatWasEnteredFromBorderless_ReturnsToBorderlessWithoutTheControlBar() => UiContext.Run(() =>
+    {
+        using var window = new Window();
+        var videoOnScreen = window.VideoArea.RectangleToScreen(window.VideoArea.ClientRectangle);
+        window.Controller.ToggleBorderless();
+
+        window.Controller.ToggleFullscreen();
+        window.Controller.ToggleFullscreen();
+
+        Assert.True(window.Controller.IsBorderless);
+        Assert.False(window.ControlPanel.Visible);
+        Assert.Equal(FormBorderStyle.None, window.Form.FormBorderStyle);
+        Assert.Equal(videoOnScreen, window.Form.Bounds);
+    }, sta: true);
+
+    [Fact]
+    public void Borderless_LeavesFullscreenFirst_SoBothModesRememberTheRightWindow() => UiContext.Run(() =>
+    {
+        using var window = new Window();
+        var videoOnScreen = window.VideoArea.RectangleToScreen(window.VideoArea.ClientRectangle);
+        window.Controller.ToggleFullscreen();
+
+        window.Controller.ToggleBorderless(); // fullscreen -> normal window -> borderless
+
+        Assert.False(window.Controller.IsFullscreen);
+        Assert.True(window.Controller.IsBorderless);
+        Assert.False(window.Form.TopMost);
+        Assert.Equal(videoOnScreen, window.Form.Bounds);
+
+        window.Controller.ToggleBorderless();
+
+        Assert.False(window.Controller.IsBorderless);
+        Assert.Equal(FormBorderStyle.Sizable, window.Form.FormBorderStyle);
+        Assert.Equal(window.OriginalBounds, window.Form.Bounds);
+        Assert.True(window.ControlPanel.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void LeavingBorderlessWhileFullscreen_LeavesBothModes() => UiContext.Run(() =>
+    {
+        using var window = new Window();
+        window.Controller.ToggleBorderless();
+        window.Controller.ToggleFullscreen();
+
+        window.Controller.ToggleBorderless();
+
+        Assert.False(window.Controller.IsFullscreen);
+        Assert.False(window.Controller.IsBorderless);
+        Assert.Equal(FormBorderStyle.Sizable, window.Form.FormBorderStyle);
+        Assert.Equal(window.OriginalBounds, window.Form.Bounds);
+        Assert.True(window.ControlPanel.Visible);
     }, sta: true);
 }

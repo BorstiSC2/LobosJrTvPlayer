@@ -94,7 +94,7 @@ public class AppCoordinatorTests
     [Fact]
     public void Start_AlsoConnectsTheTwitchBot() => UiContext.Run(async () =>
     {
-        var twitchClient = Substitute.For<ITwitchClient>();
+        var twitchClient = Chat.Client();
         using var app = new App(new PlaylistSetup().WithPlaylist(IdA, "A").WithCache(IdA, "a1"), twitchClient);
 
         await app.Coordinator.StartAsync();

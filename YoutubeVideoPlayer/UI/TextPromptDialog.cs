@@ -4,24 +4,12 @@ using System.Windows.Forms;
 namespace YouTubeVideoPlayer.UI
 {
     /// <summary>A minimal modal dialog asking for a single line of text.</summary>
-    public sealed class TextPromptDialog : Form
+    public sealed class TextPromptDialog : DialogForm
     {
         private readonly TextBox _textBox;
 
-        private TextPromptDialog(string title, string prompt, string initialText)
+        private TextPromptDialog(string title, string prompt, string initialText) : base(title)
         {
-            Text = title;
-            if (AppIcon.Instance is { } icon)
-                Icon = icon;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
-            MinimizeBox = false;
-            MaximizeBox = false;
-            ShowInTaskbar = false;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(12);
-
             var layout = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill };
             layout.Controls.Add(new Label { Text = prompt, AutoSize = true, Margin = new Padding(0, 0, 0, 6) });
 
@@ -30,16 +18,7 @@ namespace YouTubeVideoPlayer.UI
 
             var okButton = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true };
             var cancelButton = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-            var buttons = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 10, 0, 0)
-            };
-            buttons.Controls.Add(cancelButton);
-            buttons.Controls.Add(okButton);
-            layout.Controls.Add(buttons);
+            layout.Controls.Add(CreateButtonRow(10, cancelButton, okButton));
 
             Controls.Add(layout);
             AcceptButton = okButton;

@@ -58,6 +58,22 @@ public class TwitchTokenStoreTests
     }
 
     [Fact]
+    public void Load_WithAFileThatCannotBeReadRightNow_ReturnsNullAndKeepsTheFile()
+    {
+        using var dir = new TempDirectory();
+        var store = new TwitchTokenStore(dir.Path);
+        store.Save(Token);
+
+        using (new FileStream(dir.File(TwitchTokenStore.FileName), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Null(store.Load());
+        }
+
+        Assert.Empty(Directory.GetFiles(dir.Path, "*.corrupt-*"));
+        Assert.Equal("ref", store.Load()!.RefreshToken);
+    }
+
+    [Fact]
     public void Load_WithCorruptFile_QuarantinesItAndReturnsNull()
     {
         using var dir = new TempDirectory();

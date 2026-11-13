@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using TwitchLib.Client;
+using TwitchLib.Client.Enums;
 using TwitchLib.Client.Events;
 using TwitchLib.Client.Exceptions;
 using TwitchLib.Client.Interfaces;
@@ -88,7 +89,7 @@ public class TwitchChatServiceTests
         SynchronizationContext.SetSynchronizationContext(null);
         try
         {
-            Assert.Throws<InvalidOperationException>(() => new TwitchChatService(ManualSettings, null, Substitute.For<ITwitchClient>()));
+            Assert.Throws<InvalidOperationException>(() => new TwitchChatService(ManualSettings, null, Chat.Client()));
         }
         finally
         {
@@ -101,7 +102,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void ManualToken_ConnectsWithTheConfiguredCredentials() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         var states = new List<TwitchConnectionState>();
         chat.StateChanged += (_, s) => states.Add(s);
@@ -123,7 +124,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void ManualToken_ARejectedLoginIsReportedAndStays() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
 
@@ -138,7 +139,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void ConnectionFailure_IsReportedAsDisconnected() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         client.ConnectAsync().Returns(Task.FromException<bool>(new InvalidOperationException("no network")));
         var chat = new TwitchChatService(ManualSettings, null, client);
 
@@ -147,10 +148,144 @@ public class TwitchChatServiceTests
         Assert.Equal(TwitchConnectionState.Disconnected, chat.State);
     });
 
+    private static int ConnectCalls(ITwitchClient client) => client.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ITwitchClient.ConnectAsync));
+
+    /// <summary>
+    /// Waits until connect attempt number <paramref name="attempt"/> has been made and its failure has been handled.
+    /// A new attempt sets the state to Connecting before it connects, and the failure sets it back to Disconnected
+    /// and schedules the next retry in the same step, so both together mean that the retry is waiting.
+    /// </summary>
+    private static Task WaitForFailedAttemptAsync(ITwitchClient client, TwitchChatService chat, int attempt) =>
+        Async.WaitUntilAsync(
+            () => ConnectCalls(client) == attempt && chat.State == TwitchConnectionState.Disconnected,
+            because: $"connect attempt {attempt} fails");
+
+    [Fact]
+    public void ARefusedConnection_IsReportedAsDisconnected_AndTriedAgain() => UiContext.Run(async () =>
+    {
+        // TwitchLib reports a connection that could not be opened (offline, Twitch unreachable) with false, and raises no event.
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(false);
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
+
+        await chat.StartAsync();
+
+        Assert.Equal(TwitchConnectionState.Disconnected, chat.State);
+        Assert.Equal(1, ConnectCalls(client));
+
+        client.ConnectAsync().Returns(true); // the network is back
+        time.Advance(TwitchChatService.ReconnectDelay);
+        await Async.WaitUntilAsync(() => ConnectCalls(client) == 2, because: "the connection is tried again");
+        Joined(client);
+        await Async.SettleAsync();
+
+        Assert.Equal(TwitchConnectionState.Connected, chat.State);
+        time.Advance(TwitchChatService.MaxReconnectDelay); // a connected bot does not keep trying
+        await Async.SettleAsync();
+        Assert.Equal(2, ConnectCalls(client));
+    });
+
+    [Fact]
+    public void AConnectionError_IsTriedAgainToo() => UiContext.Run(async () =>
+    {
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(Task.FromException<bool>(new InvalidOperationException("no network")));
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
+        await chat.StartAsync();
+        client.ConnectAsync().Returns(true);
+
+        time.Advance(TwitchChatService.ReconnectDelay);
+
+        await Async.WaitUntilAsync(() => ConnectCalls(client) == 2, because: "the connection is tried again");
+    });
+
+    [Fact]
+    public void ARefusedConnection_IsTriedAgainWithGrowingPauses_UpToTheMaximum() => UiContext.Run(async () =>
+    {
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(false);
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
+        await chat.StartAsync();
+
+        var attempts = 1;
+        foreach (var seconds in new[] { 15, 30, 60, 120, 240, 300, 300 })
+        {
+            var pause = TimeSpan.FromSeconds(seconds);
+
+            time.Advance(pause - TimeSpan.FromSeconds(1));
+            await Async.SettleAsync();
+            Assert.Equal(attempts, ConnectCalls(client)); // too early
+
+            time.Advance(TimeSpan.FromSeconds(1));
+            attempts++;
+            await WaitForFailedAttemptAsync(client, chat, attempts);
+        }
+    });
+
+    [Fact]
+    public void RejectedCredentials_AreNotTriedAgain() => UiContext.Run(async () =>
+    {
+        // TwitchLib refuses a login name this short, and will refuse it again: retrying would only fill the log.
+        var settings = new TwitchSettings { BotUsername = "ab", OAuthToken = "oauth:x", Channel = "lobosjr" };
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        var chat = new TwitchChatService(settings, null, client, time);
+
+        await chat.StartAsync();
+        time.Advance(TwitchChatService.MaxReconnectDelay);
+        await Async.SettleAsync();
+
+        Assert.Equal(TwitchConnectionState.Disconnected, chat.State);
+        await client.DidNotReceive().ConnectAsync();
+        client.DidNotReceiveWithAnyArgs().Initialize(default!, default(string)!);
+    });
+
+    [Fact]
+    public void Dispose_EndsAWaitingRetry() => UiContext.Run(async () =>
+    {
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(false);
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
+        await chat.StartAsync();
+
+        await chat.DisposeAsync();
+        time.Advance(TwitchChatService.MaxReconnectDelay);
+        await Async.SettleAsync();
+
+        Assert.Equal(1, ConnectCalls(client));
+    });
+
+    [Fact]
+    public void ARefusedConnectionOnARealTwitchClient_IsTriedAgain_AndTheChannelIsJoinedOnce() => UiContext.Run(async () =>
+    {
+        // After a failed first connect TwitchLib still has the channel queued, so the retry must not join it by hand as well.
+        var time = new FakeTimeProvider();
+        var transport = new FakeChatTransport { AcceptConnections = false };
+        var client = new TwitchClient(transport, ClientProtocol.WebSocket, null!, null!);
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
+
+        await chat.StartAsync();
+        Assert.Equal(TwitchConnectionState.Disconnected, chat.State);
+
+        transport.AcceptConnections = true;
+        time.Advance(TwitchChatService.ReconnectDelay);
+        await Async.WaitUntilAsync(() => transport.IsConnected, because: "the connection is tried again");
+        await transport.WelcomeAsync("lobosbot");
+        await Async.WaitUntilAsync(() => transport.JoinCommands.Count == 1, because: "TwitchLib joins the channel after the welcome");
+        await transport.EchoJoinsAsync("lobosbot");
+        await Async.WaitUntilAsync(() => chat.State == TwitchConnectionState.Connected, because: "the join is confirmed");
+
+        Assert.Equal(new[] { "JOIN #lobosjr" }, transport.JoinCommands);
+    });
+
     [Fact]
     public void ConnectionStates_FollowTheClient() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
         Joined(client);
@@ -174,7 +309,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void SendMessage_OnlyWhileConnected() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
 
@@ -190,7 +325,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void SendMessage_FailuresAreSwallowed() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         client.SendMessageAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>()).Returns(Task.FromException(new Exception("rate limited")));
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
@@ -207,7 +342,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void Connected_PostsTheInitialMessage_AndAReconnectMessageAfterALostConnection() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
 
@@ -231,7 +366,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_ARenewedTokenDoesNotGreetAgain() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
         Joined(client);
@@ -252,15 +387,29 @@ public class TwitchChatServiceTests
     [Fact]
     public void Dispose_WhileConnected_SaysGoodbyeBeforeDisconnecting() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
-        var chat = new TwitchChatService(ManualSettings, null, client);
+        var time = new FakeTimeProvider();
+        var client = Chat.Client();
+        var chat = new TwitchChatService(ManualSettings, null, client, time);
         await chat.StartAsync();
         Joined(client);
         await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
         client.IsConnected.Returns(true);
         client.ClearReceivedCalls();
 
-        await chat.DisposeAsync();
+        var disposal = chat.DisposeAsync().AsTask();
+        await WaitForMessageAsync(client, TwitchChatService.GoodbyeMessage);
+        await Async.SettleAsync();
+
+        // The goodbye gets a moment to leave TwitchLib's send queue; the connection is not closed before that (on the fake clock).
+        Assert.False(disposal.IsCompleted);
+        await client.DidNotReceive().DisconnectAsync();
+
+        await Async.WaitUntilAsync(() =>
+        {
+            time.Advance(TwitchChatService.GoodbyeFlushDelay);
+            return disposal.IsCompleted;
+        }, because: "the goodbye delay is over");
+        await disposal;
 
         Received.InOrder(() =>
         {
@@ -272,7 +421,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void Dispose_WhileNotConnected_SaysNothing() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(ManualSettings, null, client);
         await chat.StartAsync();
 
@@ -284,7 +433,7 @@ public class TwitchChatServiceTests
     [Fact]
     public void Dispose_DisconnectsAndIgnoresLaterEvents() => UiContext.Run(async () =>
     {
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         client.IsConnected.Returns(true);
         var chat = new TwitchChatService(ManualSettings, null, client);
         var states = 0;
@@ -308,7 +457,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_WithoutStoredToken_AsksForASignIn_AndDoesNotConnect() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: false);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
 
         await chat.StartAsync();
@@ -322,7 +471,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_ConnectsWithTheStoredToken() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
 
         await chat.StartAsync();
@@ -332,35 +481,120 @@ public class TwitchChatServiceTests
         Assert.Equal("lobosbot", chat.BotLogin);
     });
 
+    private static bool WasCalled(ITwitchClient client, string method) =>
+        client.ReceivedCalls().Any(c => c.GetMethodInfo().Name == method);
+
     [Fact]
-    public void AppSignIn_ARenewedTokenReconnectsWithTheNewCredentials() => UiContext.Run(async () =>
+    public void AppSignIn_ARenewedTokenReconnectsWithTheNewCredentials_AndJoinsTheChannelAgain() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
         client.IsConnected.Returns(true);
         client.ClearReceivedCalls();
 
         await tokens.Manager.RefreshAsync();
         // The reconnect runs on the thread pool; wait for it instead of hoping that one settle is enough.
-        await Async.WaitUntilAsync(() => client.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITwitchClient.ConnectAsync)));
+        await Async.WaitUntilAsync(() => WasCalled(client, nameof(ITwitchClient.JoinChannelAsync)), because: "the channel is joined again");
         await Async.SettleAsync();
 
+        // TwitchLib forgets its channel when it disconnects, so the bot has to join it again by hand.
         Received.InOrder(() =>
         {
             client.DisconnectAsync();
             client.SetConnectionCredentials(Arg.Is<ConnectionCredentials>(c => IsCredentials(c, "lobosbot", "acc-2")));
             client.ConnectAsync();
+            client.JoinChannelAsync("lobosjr", Arg.Any<bool>());
         });
         client.DidNotReceiveWithAnyArgs().Initialize(default!, default(string)!);
+    });
+
+    [Fact]
+    public void AppSignIn_ARenewalAfterALostConnectionJoinsTheChannelAgain() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Chat.Client();
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
+        await chat.StartAsync();
+        Joined(client);
+        await WaitForMessageAsync(client, TwitchChatService.ConnectedMessage);
+        Disconnected(client); // the connection is gone (client.IsConnected stays false), so there is nothing to close
+        await Async.SettleAsync();
+        client.ClearReceivedCalls();
+
+        await tokens.Manager.RefreshAsync();
+        await Async.WaitUntilAsync(() => WasCalled(client, nameof(ITwitchClient.JoinChannelAsync)), because: "the channel is joined again");
+
+        await client.DidNotReceive().DisconnectAsync();
+        await client.Received(1).ConnectAsync();
+        await client.Received(1).JoinChannelAsync("lobosjr", Arg.Any<bool>());
+    });
+
+    [Fact]
+    public void AppSignIn_TheFirstConnectLeavesTheJoinToTwitchLib() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Chat.Client();
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
+
+        await chat.StartAsync();
+        await Async.SettleAsync();
+
+        // Initialize hands the channel to TwitchLib, which joins it once the first connection is welcomed.
+        await client.Received(1).ConnectAsync();
+        await client.DidNotReceive().JoinChannelAsync(Arg.Any<string>(), Arg.Any<bool>());
+    });
+
+    [Fact]
+    public void AppSignIn_ARenewalBeforeTheFirstJoinLeavesTheJoinToTwitchLib() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Chat.Client();
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
+        await chat.StartAsync(); // never joined (e.g. the login was rejected), so TwitchLib still has the channel queued
+        client.IsConnected.Returns(true);
+        client.ClearReceivedCalls();
+
+        await tokens.Manager.RefreshAsync();
+        await Async.WaitUntilAsync(() => WasCalled(client, nameof(ITwitchClient.ConnectAsync)));
+        await Async.SettleAsync();
+
+        await client.DidNotReceive().JoinChannelAsync(Arg.Any<string>(), Arg.Any<bool>());
+    });
+
+    [Fact]
+    public void AppSignIn_ARenewedTokenJoinsTheChannelAgainOnARealTwitchClient() => UiContext.Run(async () =>
+    {
+        // The substitute tests above only show which calls the service makes. This one runs TwitchLib itself
+        // on a fake connection, to show that the channel really is joined again after the credential swap.
+        using var tokens = new Tokens(signedIn: true);
+        var transport = new FakeChatTransport();
+        var client = new TwitchClient(transport, ClientProtocol.WebSocket, null!, null!);
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
+
+        await chat.StartAsync();
+        await transport.WelcomeAsync("lobosbot");
+        await Async.WaitUntilAsync(() => transport.JoinCommands.Count == 1, because: "TwitchLib joins the channel after the welcome");
+        await transport.EchoJoinsAsync("lobosbot");
+        await Async.WaitUntilAsync(() => chat.State == TwitchConnectionState.Connected, because: "the first join is confirmed");
+        transport.ClearSent();
+
+        await tokens.Manager.RefreshAsync();
+        await Async.WaitUntilAsync(() => transport.JoinCommands.Count == 1, because: "the channel is joined again after the swap");
+        await transport.EchoJoinsAsync("lobosbot");
+        await Async.WaitUntilAsync(() => chat.State == TwitchConnectionState.Connected, because: "the second join is confirmed");
+
+        Assert.Equal(new[] { "JOIN #lobosjr" }, transport.JoinCommands);
     });
 
     [Fact]
     public void AppSignIn_ARejectedLoginIsRetriedOnceWithARefreshedToken() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
 
@@ -379,7 +613,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_ASuccessfulJoinResetsTheLoginRetry() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
 
@@ -398,7 +632,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_ARevokedSignInDisconnects() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
         client.IsConnected.Returns(true);
@@ -414,10 +648,52 @@ public class TwitchChatServiceTests
     });
 
     [Fact]
+    public void AppSignIn_ARenewedTokenConnectsAtOnce_AndEndsTheWaitingRetry() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(false);
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client, tokens.Time);
+        await chat.StartAsync();
+        Assert.Equal(TwitchConnectionState.Disconnected, chat.State);
+        client.ConnectAsync().Returns(true);
+
+        await tokens.Manager.RefreshAsync();
+        await Async.WaitUntilAsync(() => ConnectCalls(client) == 2, because: "the new token connects at once");
+        Joined(client);
+        await Async.SettleAsync();
+        tokens.Time.Advance(TwitchChatService.ReconnectDelay);
+        await Async.SettleAsync();
+
+        Assert.Equal(TwitchConnectionState.Connected, chat.State);
+        Assert.Equal(2, ConnectCalls(client)); // the retry that was waiting is gone
+        client.Received(1).SetConnectionCredentials(Arg.Is<ConnectionCredentials>(c => IsCredentials(c, "lobosbot", "acc-2")));
+    });
+
+    [Fact]
+    public void AppSignIn_ARevokedSignInEndsTheWaitingRetry() => UiContext.Run(async () =>
+    {
+        using var tokens = new Tokens(signedIn: true);
+        var client = Chat.Client();
+        client.ConnectAsync().Returns(false);
+        var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client, tokens.Time);
+        await chat.StartAsync();
+        tokens.Auth.RefreshAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<TokenResponse>(new TwitchAuthRejectedException("revoked")));
+
+        await tokens.Manager.RefreshAsync();
+        await Async.SettleAsync();
+        tokens.Time.Advance(TwitchChatService.MaxReconnectDelay);
+        await Async.SettleAsync();
+
+        Assert.Equal(TwitchConnectionState.SignInRequired, chat.State);
+        Assert.Equal(1, ConnectCalls(client)); // there is no token left to retry with
+    });
+
+    [Fact]
     public void AppSignIn_TokenChangesBeforeStartAreIgnored() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         _ = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
 
         await tokens.Manager.InitializeAsync();
@@ -431,7 +707,7 @@ public class TwitchChatServiceTests
     public void AppSignIn_DisposeUnsubscribesFromTheTokenManager() => UiContext.Run(async () =>
     {
         using var tokens = new Tokens(signedIn: true);
-        var client = Substitute.For<ITwitchClient>();
+        var client = Chat.Client();
         var chat = new TwitchChatService(AppSignInSettings, tokens.Manager, client);
         await chat.StartAsync();
         await chat.DisposeAsync();

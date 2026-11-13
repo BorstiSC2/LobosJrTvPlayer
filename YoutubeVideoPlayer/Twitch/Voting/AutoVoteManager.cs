@@ -41,6 +41,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private readonly IPlaybackControl _playback;
         private readonly SkipVoteManager _votes;
         private readonly ContextTimer _timer;
+        private readonly TimeProvider _time;
         private NowPlaying? _handledVideo;
         private bool _enabled;
         private bool _disposed;
@@ -57,7 +58,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             _chat = chat;
             _playback = playback;
             _votes = votes;
-            _timer = new ContextTimer(context, CheckInterval, periodic: true, Check, timeProvider);
+            _time = timeProvider ?? TimeProvider.System;
+            _timer = new ContextTimer(context, CheckInterval, periodic: true, Check, _time);
         }
 
         /// <summary>
@@ -121,12 +123,15 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 return;
             }
 
-            StartVoteAsync(duration).FireAndForget("The autovote failed.");
+            // Finding the options takes a moment too (a title lookup may take seconds); the vote manager
+            // takes that out of the countdown so that the vote is over by then.
+            var mustEndBy = _time.GetUtcNow() + remaining - SafetyMargin;
+            StartVoteAsync(duration, mustEndBy).FireAndForget("The autovote failed.");
         }
 
-        private async Task StartVoteAsync(TimeSpan duration)
+        private async Task StartVoteAsync(TimeSpan duration, DateTimeOffset mustEndBy)
         {
-            var reply = await _votes.StartAfterCurrentAsync(duration);
+            var reply = await _votes.StartAfterCurrentAsync(duration, mustEndBy);
             if (reply != null)
                 Logger.Log($"Autovote did not start: {reply}");
         }

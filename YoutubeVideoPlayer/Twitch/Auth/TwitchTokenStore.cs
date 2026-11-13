@@ -24,13 +24,13 @@ namespace YouTubeVideoPlayer.Twitch.Auth
         {
             try
             {
-                var token = JsonFile.Read<TwitchToken>(_path);
+                var token = JsonFile.ReadOrQuarantine<TwitchToken>(_path, "a new Twitch sign-in is needed.");
                 return token == null || string.IsNullOrEmpty(token.RefreshToken) ? null : token;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Logger.Log($"Could not read {FileName}; a new Twitch sign-in is needed.", ex);
-                JsonFile.QuarantineCorruptFile(_path);
+                // Not readable right now (locked, no access) is no sign of a damaged file: leave it alone.
+                Logger.Log($"Could not read {FileName} right now; the file is left as it is.", ex);
                 return null;
             }
         }

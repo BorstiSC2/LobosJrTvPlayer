@@ -343,6 +343,47 @@ public class SkipVoteManagerTests
     });
 
     [Fact]
+    public void Start_TriesEverySpareCandidate_EvenWhenEarlierBatchesWereMostlyUnavailable() => UiContext.Run(async () =>
+    {
+        // Batch 1 (a, bad1, bad2) finds one video, batch 2 (bad3, bad4) none: "b" is the last spare and still has to be tried.
+        using var setup = new Setup(pool: new[] { "a", "bad1", "bad2", "bad3", "bad4", "b" });
+
+        var reply = await setup.StartAsync();
+        await setup.AnnounceAsync();
+
+        Assert.Null(reply);
+        Assert.Equal(
+            new[] { $"1) Title a {Dash} vote with !vote 1", $"2) Title b {Dash} vote with !vote 2" },
+            setup.Sent.Skip(1));
+    });
+
+    [Fact]
+    public void StartAfterCurrent_WithADeadline_ShortensTheCountdownToWhatIsLeft() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+
+        // The vote has to be over in 60 s; posting the three options takes 6 s of that.
+        var reply = await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), setup.Time.GetUtcNow() + TimeSpan.FromSeconds(60));
+        await Async.SettleAsync();
+
+        Assert.Null(reply);
+        Assert.Contains("Voting ends 54 seconds after the last option.", setup.Sent[0]);
+    });
+
+    [Fact]
+    public void StartAfterCurrent_WithTooLittleTimeBeforeTheDeadline_DoesNotStartAVote() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+
+        var reply = await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromMinutes(2), setup.Time.GetUtcNow() + TimeSpan.FromSeconds(20));
+        await Async.SettleAsync();
+
+        Assert.Equal("There is not enough time left for a vote.", reply);
+        Assert.False(setup.Manager.IsRunning);
+        Assert.Empty(setup.Sent);
+    });
+
+    [Fact]
     public void Start_SkipsVideosWithoutTitle() => UiContext.Run(async () =>
     {
         using var setup = new Setup(optionCount: 2, pool: new[] { "untitled", "a", "b" });

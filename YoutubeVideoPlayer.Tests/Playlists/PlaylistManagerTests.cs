@@ -626,6 +626,201 @@ public class PlaylistManagerTests
 
     #endregion
 
+    #region Failures that must not damage the playlists
+
+    /// <summary>Makes playlists.json impossible to replace, so every save fails, until it is disposed.</summary>
+    private sealed class UnwritableLibrary : IDisposable
+    {
+        private readonly string _path;
+
+        public UnwritableLibrary(PlaylistSetup setup)
+        {
+            _path = Path.Combine(setup.Folder, "playlists.json");
+            File.SetAttributes(_path, FileAttributes.ReadOnly);
+        }
+
+        public void Dispose() => File.SetAttributes(_path, FileAttributes.Normal);
+    }
+
+    [Fact]
+    public void Add_WhoseSaveFails_LeavesNothingBehind_SoTheNextTryAddsOnlyOnePlaylist() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1").OnYouTube(IdB, "b1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+
+        using (new UnwritableLibrary(setup))
+            await Assert.ThrowsAnyAsync<UnauthorizedAccessException>(() => manager.AddAsync("B", Url(IdB)));
+
+        Assert.Equal(new[] { IdA }, manager.Playlists.Select(p => p.Key));
+        await manager.AddAsync("B", Url(IdB));
+        Assert.Equal(new[] { "A", "B" }, setup.SavedLibrary().Playlists.Select(p => p.Title));
+    });
+
+    [Fact]
+    public void Remove_WhoseSaveFails_KeepsThePlaylistItsCacheAndTheSelection() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup()
+            .WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1")
+            .WithPlaylist(IdB, "B").WithCache(IdB, "b1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        await WaitForBackgroundLoadingAsync(manager);
+
+        using (new UnwritableLibrary(setup))
+            Assert.ThrowsAny<UnauthorizedAccessException>(() => manager.Remove(IdA));
+
+        Assert.Equal(new[] { IdA, IdB }, manager.Playlists.Select(p => p.Key));
+        Assert.Equal(IdA, manager.SelectedKey);
+        Assert.True(setup.Cache.Exists(IdA));
+        Assert.Equal(new[] { "a1" }, Pool(manager));
+
+        // The failed attempt must not change what the next successful save writes: playlist and selection are still in it.
+        manager.Rename(IdA, "A2");
+        var saved = setup.SavedLibrary();
+        Assert.Equal(new[] { "A2", "B" }, saved.Playlists.Select(p => p.Title));
+        Assert.Equal(Url(IdA), saved.SelectedPlaylistUrl);
+
+        manager.Remove(IdA); // works again once the file can be written
+        Assert.Equal(new[] { "B" }, setup.SavedLibrary().Playlists.Select(p => p.Title));
+    });
+
+    [Fact]
+    public void Rename_WhoseSaveFails_KeepsTheOldTitle() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+
+        using (new UnwritableLibrary(setup))
+            Assert.ThrowsAny<UnauthorizedAccessException>(() => manager.Rename(IdA, "New"));
+
+        Assert.Equal("A", manager.Playlists[0].Title);
+    });
+
+    [Fact]
+    public void Select_WhoseSaveFails_KeepsTheSelection() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup()
+            .WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1")
+            .WithPlaylist(IdB, "B").WithCache(IdB, "b1");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        await WaitForBackgroundLoadingAsync(manager);
+
+        using (new UnwritableLibrary(setup))
+            await Assert.ThrowsAnyAsync<UnauthorizedAccessException>(() => manager.SelectAsync(IdB));
+
+        Assert.Equal(IdA, manager.SelectedKey);
+        Assert.Equal(new[] { "a1" }, Pool(manager));
+
+        // A later successful save must still write the selection that is really in use.
+        manager.Rename(IdB, "B2");
+        Assert.Equal(Url(IdA), setup.SavedLibrary().SelectedPlaylistUrl);
+    });
+
+    [Fact]
+    public void Select_OfAPlaylistThatWasRemovedWhileItLoaded_Throws() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1").WithPlaylist(IdB, "B");
+        var download = new TaskCompletionSource<IReadOnlyList<string>>();
+        setup.YouTube.GetPlaylistVideoIdsAsync(IdB, Arg.Any<CancellationToken>()).Returns(download.Task);
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        var select = manager.SelectAsync(IdB);
+        await Async.WaitUntilAsync(() => manager.Playlists[1].State == PlaylistLoadState.Loading);
+
+        manager.Remove(IdB);
+        download.SetResult(new[] { "b1" });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => select);
+        Assert.Equal(IdA, manager.SelectedKey);
+        Assert.Equal(Url(IdA), setup.SavedLibrary().SelectedPlaylistUrl);
+    });
+
+    [Fact]
+    public void Initialize_WithAFileThatCannotBeRead_RefusesToReplaceItLater() => UiContext.Run(async () =>
+    {
+        // Saving the empty library in memory would wipe the playlists that are in the (locked) file.
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1").OnYouTube(IdB, "b1");
+        var manager = setup.Create();
+
+        using (new FileStream(Path.Combine(setup.Folder, "playlists.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+            await Assert.ThrowsAsync<IOException>(() => manager.InitializeAsync());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.AddAsync("B", Url(IdB)));
+        Assert.Equal(new[] { "A" }, setup.SavedLibrary().Playlists.Select(p => p.Title));
+    });
+
+    [Fact]
+    public void Update_ThatReturnsNoVideos_KeepsThePreviousListAndItsCache() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2").OnYouTube(IdA);
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.UpdateAsync(IdA));
+
+        Assert.Contains("no videos", error.Message);
+        Assert.Equal(PlaylistLoadState.Loaded, manager.Playlists[0].State);
+        Assert.Equal(new[] { "a1", "a2" }, Pool(manager));
+        Assert.Equal(new[] { "a1", "a2" }, setup.Cache.TryRead(IdA)!.VideoIds);
+    });
+
+    [Fact]
+    public void Add_OfAnEmptyPlaylist_IsLoadedButNotCached_SoTheNextStartAsksYouTubeAgain() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().OnYouTube(IdB);
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+
+        var playlist = await manager.AddAsync("B", Url(IdB));
+
+        Assert.Equal(PlaylistLoadState.Loaded, playlist.State);
+        Assert.Empty(playlist.VideoIds);
+        Assert.False(setup.Cache.Exists(IdB));
+    });
+
+    [Fact]
+    public void ADownloadWhoseCacheCannotBeWritten_IsStillUsed() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().OnYouTube(IdB, "b1", "b2");
+        File.WriteAllText(Path.Combine(setup.Folder, "PlaylistCache"), "a file where the cache folder should be");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+
+        var playlist = await manager.AddAsync("B", Url(IdB));
+
+        Assert.Equal(PlaylistLoadState.Loaded, playlist.State);
+        Assert.Equal(new[] { "b1", "b2" }, playlist.VideoIds);
+        Assert.Equal(new[] { "b1", "b2" }, Pool(manager));
+    });
+
+    #endregion
+
+    [Fact]
+    public void SequenceChanged_IsNotRaisedByARebuildThatChangesNothing() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2");
+        var manager = setup.Create();
+        await manager.InitializeAsync();
+        var sequenceChanges = 0;
+        var poolChanges = 0;
+        manager.SequenceChanged += (_, _) => sequenceChanges++;
+        manager.PoolChanged += (_, _) => poolChanges++;
+
+        setup.OnYouTube(IdA, "a1", "a2"); // the same videos again: a prepared next video stays valid
+        var unchanged = await manager.UpdateAsync(IdA);
+
+        Assert.Equal(new PlaylistUpdateResult("A", 0, 0, 2), unchanged);
+        Assert.Equal(0, sequenceChanges);
+        Assert.Equal(1, poolChanges);
+
+        setup.OnYouTube(IdA, "a2", "a1"); // another order
+        await manager.UpdateAsync(IdA);
+        Assert.Equal(1, sequenceChanges);
+    });
+
     [Fact]
     public void PlaylistInfo_ExposesTheEntry() => UiContext.Run(async () =>
     {

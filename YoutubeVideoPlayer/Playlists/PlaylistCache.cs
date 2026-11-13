@@ -25,17 +25,17 @@ namespace YouTubeVideoPlayer.Playlists
             var path = GetPath(playlistId);
             try
             {
-                var data = JsonFile.Read<PlaylistCacheData>(path);
+                var data = JsonFile.ReadOrQuarantine<PlaylistCacheData>(path, "it will be downloaded again.");
                 if (data == null)
                     return null;
 
                 data.VideoIds ??= new();
                 return data;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // Not readable right now (locked, no access) is no sign of a damaged file: leave it alone and download.
                 Logger.Log($"Could not read the cache of playlist '{playlistId}'. It will be downloaded again.", ex);
-                JsonFile.QuarantineCorruptFile(path);
                 return null;
             }
         }

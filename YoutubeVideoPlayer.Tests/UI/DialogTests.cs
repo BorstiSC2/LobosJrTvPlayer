@@ -343,14 +343,14 @@ public class PlaylistDialogTests
         var (setup, manager) = await LoadAsync(ThreePlaylists());
         using var _ = setup;
         setup.OnYouTube(IdA, "a1", "a2", "a3");
-        setup.OnYouTube(IdB);
+        setup.OnYouTube(IdB, "b2"); // b1 is gone (an empty answer would not count: it fails, see the manager tests)
         setup.OnYouTube(IdC, "c1", "c2");
         using var dialog = new PlaylistDialog(manager).ShowHidden();
 
         dialog.Button("Update all").PerformClick();
         await Async.WaitUntilAsync(() => Status(dialog).Text.StartsWith("Updated 3"));
 
-        Assert.Equal("Updated 3 playlist(s): +3 / −1 videos.", Status(dialog).Text);
+        Assert.Equal("Updated 3 playlist(s): +4 / −1 videos.", Status(dialog).Text);
         Assert.Equal(SystemColors.GrayText, Status(dialog).ForeColor);
         Assert.Equal("2", List(dialog).Items[3].SubItems[1].Text);
     }, sta: true);

@@ -34,22 +34,17 @@ namespace YouTubeVideoPlayer.Playlists
 
         public void Save(PlaylistLibrary library) => JsonFile.WriteAtomic(_path, library);
 
+        /// <summary>
+        /// A file that is damaged is renamed and treated as missing. A file that cannot be read right now
+        /// (locked, no access) is not damaged: the exception is thrown, and the file is neither renamed nor replaced.
+        /// </summary>
         private static PlaylistLibrary? TryRead(string path)
         {
-            try
-            {
-                var library = JsonFile.Read<PlaylistLibrary>(path);
-                if (library != null)
-                    library.Playlists ??= new();
+            var library = JsonFile.ReadOrQuarantine<PlaylistLibrary>(path, "it will be recreated.");
+            if (library != null)
+                library.Playlists ??= new();
 
-                return library;
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"Could not read '{path}'. The file was renamed and will be recreated.", ex);
-                JsonFile.QuarantineCorruptFile(path);
-                return null;
-            }
+            return library;
         }
     }
 }

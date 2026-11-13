@@ -82,11 +82,16 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// vote shortly before a video ends). The winner is queued instead of played immediately.
         /// </summary>
         /// <param name="duration">Length of the countdown; shorter than <see cref="Duration"/> if the video ends soon.</param>
+        /// <param name="mustEndBy">
+        /// When the vote has to be over at the latest (on the clock of this manager). Looking up the options and posting
+        /// them takes time, and the countdown only starts after that, so it is shortened by the time that is already gone:
+        /// the vote then ends by this time, not that much later. If there is too little time left, no vote starts.
+        /// </param>
         /// <returns>A message if the vote could not be started, otherwise <c>null</c>.</returns>
-        public Task<string?> StartAfterCurrentAsync(TimeSpan duration) =>
-            StartCoreAsync("the autovote", afterCurrent: true, duration);
+        public Task<string?> StartAfterCurrentAsync(TimeSpan duration, DateTimeOffset? mustEndBy = null) =>
+            StartCoreAsync("the autovote", afterCurrent: true, duration, mustEndBy);
 
-        private async Task<string?> StartCoreAsync(string startedBy, bool afterCurrent, TimeSpan duration)
+        private async Task<string?> StartCoreAsync(string startedBy, bool afterCurrent, TimeSpan duration, DateTimeOffset? mustEndBy = null)
         {
             if (_session != null)
             {
@@ -122,6 +127,19 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             {
                 EndSession(session);
                 return "There are not enough videos available for a vote.";
+            }
+
+            if (mustEndBy is { } deadline)
+            {
+                var room = deadline - _time.GetUtcNow() - MessageDelay * options.Count;
+                if (room < session.Duration)
+                    session.Duration = TimeSpan.FromSeconds(Math.Floor(Math.Max(0, room.TotalSeconds)));
+
+                if (session.Duration < MinimumDuration)
+                {
+                    EndSession(session);
+                    return "There is not enough time left for a vote.";
+                }
             }
 
             session.Options.AddRange(options);
@@ -278,9 +296,13 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             var candidates = _videos.GetNextVideoIds(_optionCount * 3, _playback.Current?.VideoId);
             var options = new List<VoteOption>();
 
-            for (var start = 0; start < candidates.Count && options.Count < _optionCount; start += _optionCount)
+            // A batch only asks for the options that are still missing, so the next one starts right after the
+            // candidates this one used (not a fixed number further, which would skip spares).
+            var next = 0;
+            while (next < candidates.Count && options.Count < _optionCount)
             {
-                var batch = candidates.Skip(start).Take(_optionCount - options.Count).ToList();
+                var batch = candidates.Skip(next).Take(_optionCount - options.Count).ToList();
+                next += batch.Count;
                 var titles = await Task.WhenAll(batch.Select(id => Task.Run(() => TryGetTitleAsync(id, cancellationToken))));
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -361,8 +383,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 CurrentAtStart = currentAtStart;
             }
 
-            /// <summary>The countdown after the last option has been posted.</summary>
-            public TimeSpan Duration { get; }
+            /// <summary>The countdown after the last option has been posted (shortened if the options took long to find).</summary>
+            public TimeSpan Duration { get; set; }
 
             /// <summary>The vote is about the video after the current one; the winner is queued, not played at once.</summary>
             public bool AfterCurrent { get; }

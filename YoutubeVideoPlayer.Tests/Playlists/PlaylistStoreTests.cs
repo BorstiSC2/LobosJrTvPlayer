@@ -59,6 +59,23 @@ public class PlaylistStoreTests
     }
 
     [Fact]
+    public void Load_WithAFileThatCannotBeReadRightNow_ThrowsAndKeepsTheFile()
+    {
+        // A sync client or virus scanner may hold the file; that must not reset the user's playlists.
+        using var dir = new TempDirectory();
+        var path = dir.File("playlists.json");
+        File.WriteAllText(path, "{ \"playlists\": [ { \"title\": \"Mine\", \"url\": \"m\" } ] }");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Throws<IOException>(() => new PlaylistStore(dir.Path).Load());
+        }
+
+        Assert.Empty(Directory.GetFiles(dir.Path, "*.corrupt-*"));
+        Assert.Equal("Mine", Assert.Single(new PlaylistStore(dir.Path).Load().Playlists).Title);
+    }
+
+    [Fact]
     public void Load_WithNullPlaylists_ReturnsAnEmptyList()
     {
         using var dir = new TempDirectory();
@@ -168,6 +185,23 @@ public class PlaylistCacheTests
         Assert.Null(cache.TryRead("PLabc"));
         Assert.False(cache.Exists("PLabc"));
         Assert.Single(Directory.GetFiles(Path.Combine(dir.Path, "PlaylistCache"), "*.corrupt-*"));
+    }
+
+    [Fact]
+    public void TryRead_WithAFileThatCannotBeReadRightNow_ReturnsNullAndKeepsTheFile()
+    {
+        using var dir = new TempDirectory();
+        var cache = new PlaylistCache(dir.Path);
+        cache.Write(Data("PLabc", "v1", "v2"));
+        var path = Path.Combine(dir.Path, "PlaylistCache", "PLabc.json");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Null(cache.TryRead("PLabc"));
+        }
+
+        Assert.Empty(Directory.GetFiles(Path.Combine(dir.Path, "PlaylistCache"), "*.corrupt-*"));
+        Assert.Equal(new[] { "v1", "v2" }, cache.TryRead("PLabc")!.VideoIds);
     }
 
     [Fact]

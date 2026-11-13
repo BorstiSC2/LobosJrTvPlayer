@@ -91,7 +91,7 @@ Change it in the **Playlists** dialog (the **Random order** column of the list h
 - On startup the selected playlist is loaded first. The app opens **paused**: the first video is already looked up, and the **Play** button in the control bar starts it without delay (the same button pauses and continues the video later). It is read from its cache; only a playlist that has never been loaded is downloaded from YouTube.
 - All other playlists are loaded in the background one after another, so switching later is instant.
 - While a video plays, the next one is chosen and looked up in advance, so the change between two videos takes well under a second instead of several seconds of black screen. The choice is kept, so the video that was prepared is the one that plays.
-- Video lists are only downloaded again when you click **Update** / **Update all**. An update always fetches the complete list; if it fails, the previous list stays in use.
+- Video lists are only downloaded again when you click **Update** / **Update all**. An update always fetches the complete list; if it fails, or if YouTube answers with no videos at all, the previous list stays in use.
 
 ---
 
@@ -136,7 +136,7 @@ The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on)
 
 - The vote is about the video that plays **after** the current one. The rules message says so ("Vote for the video that plays AFTER the current one ...") and so does the result ("It plays after the current video.").
 - The winner is queued and starts when the current video ends; the current video is not interrupted. If the video is skipped before it ends, the queued winner plays next.
-- The vote is shortened if needed so that it is over (with a safety margin) before the video ends. Videos with too little time left, or without a known length (live streams), get no vote.
+- The vote is shortened if needed so that it is over (with a safety margin) before the video ends; the time it takes to look up the options counts too. Videos with too little time left, or without a known length (live streams), get no vote.
 - There is one vote per video, and nothing happens while the bot is not connected to the chat or another vote is running. Switching playlists drops a queued winner.
 - Unchecking the box only prevents new votes; a vote that is already running finishes. The box starts unchecked on every start.
 

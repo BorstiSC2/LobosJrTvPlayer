@@ -32,6 +32,8 @@ namespace YouTubeVideoPlayer.Playlists
         private readonly Random _random = new();
         private PlaylistLibrary _library = new();
         private List<string> _pool = new();
+        private bool _poolShuffled = true; // IsShuffled when the pool was last built
+        private bool _libraryLoadFailed;
 
         public PlaylistManager(IYouTubeService youtube, PlaylistStore store, PlaylistCache cache)
         {
@@ -64,7 +66,19 @@ namespace YouTubeVideoPlayer.Playlists
         /// </summary>
         public async Task InitializeAsync()
         {
-            _library = _store.Load();
+            try
+            {
+                _library = _store.Load();
+                _libraryLoadFailed = false;
+            }
+            catch
+            {
+                // The file exists but cannot be read (locked, no access). Saving the empty library that is in
+                // memory now would replace the user's playlists, so Save refuses until the application is restarted.
+                _libraryLoadFailed = true;
+                throw;
+            }
+
             _playlists.Clear();
             foreach (var entry in _library.Playlists)
                 _playlists.Add(CreateInfo(entry));
@@ -216,11 +230,26 @@ namespace YouTubeVideoPlayer.Playlists
             {
                 playlist = Find(playlistKey) ?? throw new InvalidOperationException("The playlist no longer exists.");
                 await EnsureLoadedAsync(playlist);
+
+                // It may have been removed while it was loading.
+                if (!_playlists.Contains(playlist))
+                    throw new InvalidOperationException("The playlist no longer exists.");
+            }
+
+            // Saved first: if that fails, the selection stays as it was.
+            var previousUrl = _library.SelectedPlaylistUrl;
+            _library.SelectedPlaylistUrl = playlist?.Url;
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                _library.SelectedPlaylistUrl = previousUrl;
+                throw;
             }
 
             SelectedKey = playlist?.Key;
-            _library.SelectedPlaylistUrl = playlist?.Url;
-            Save();
             RebuildPool(selectionChanged: true);
         }
 
@@ -245,7 +274,16 @@ namespace YouTubeVideoPlayer.Playlists
 
             var entry = new PlaylistEntry { Title = title.Trim(), Url = NormalizeUrl(playlistId) };
             _library.Playlists.Add(entry);
-            Save();
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                // Otherwise the entry would be written with the next save, and a second try would add it again.
+                _library.Playlists.Remove(entry);
+                throw;
+            }
 
             var playlist = CreateInfo(entry);
             _playlists.Add(playlist);
@@ -264,8 +302,18 @@ namespace YouTubeVideoPlayer.Playlists
         public void Rename(string playlistKey, string newTitle)
         {
             var playlist = Find(playlistKey) ?? throw new InvalidOperationException("The playlist no longer exists.");
+            var previousTitle = playlist.Entry.Title;
             playlist.Entry.Title = newTitle.Trim();
-            Save();
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                playlist.Entry.Title = previousTitle;
+                throw;
+            }
+
             PlaylistsChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -275,18 +323,32 @@ namespace YouTubeVideoPlayer.Playlists
             if (playlist == null)
                 return;
 
-            _playlists.Remove(playlist);
-            _library.Playlists.Remove(playlist.Entry);
-            _cache.Delete(playlist.Key);
-
+            // Saved first: if that fails, the playlist stays in the list and keeps its cache.
             var wasSelected = SelectedKey == playlist.Key;
+            var previousUrl = _library.SelectedPlaylistUrl;
+            var index = _library.Playlists.IndexOf(playlist.Entry);
+            _library.Playlists.Remove(playlist.Entry);
             if (wasSelected)
-            {
-                SelectedKey = null;
                 _library.SelectedPlaylistUrl = null;
+
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                if (index >= 0)
+                    _library.Playlists.Insert(index, playlist.Entry);
+
+                _library.SelectedPlaylistUrl = previousUrl;
+                throw;
             }
 
-            Save();
+            _playlists.Remove(playlist);
+            _cache.Delete(playlist.Key);
+            if (wasSelected)
+                SelectedKey = null;
+
             PlaylistsChanged?.Invoke(this, EventArgs.Empty);
 
             if (wasSelected || SelectedKey == null)
@@ -434,9 +496,18 @@ namespace YouTubeVideoPlayer.Playlists
                     Logger.Log($"Downloading video IDs of playlist '{playlist.Title}' ({playlist.Key})...");
                     data = await Task.Run(() => DownloadAsync(playlist.Key, playlist.Title));
 
-                    // The playlist may have been removed while it was downloading.
-                    if (_playlists.Contains(playlist))
-                        await Task.Run(() => _cache.Write(data));
+                    // YouTube sometimes answers with nothing at all (a consent or region page, a playlist that was made
+                    // private). That must not replace a list that works: the update fails and the old list stays.
+                    if (data.VideoIds.Count == 0 && playlist.VideoIds.Count > 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"YouTube returned no videos for \"{playlist.Title}\". Its {playlist.VideoIds.Count} known videos are kept.");
+                    }
+
+                    // The playlist may have been removed while it was downloading. A playlist without videos is not
+                    // cached, so the next start asks YouTube again instead of remembering an empty answer.
+                    if (data.VideoIds.Count > 0 && _playlists.Contains(playlist))
+                        await TryWriteCacheAsync(data);
 
                     Logger.Log($"Downloaded {data.VideoIds.Count} video IDs of playlist '{playlist.Title}'.");
                 }
@@ -458,6 +529,19 @@ namespace YouTubeVideoPlayer.Playlists
             finally
             {
                 PlaylistsChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>The cache only saves a download the next time; failing to write it must not lose the download.</summary>
+        private async Task TryWriteCacheAsync(PlaylistCacheData data)
+        {
+            try
+            {
+                await Task.Run(() => _cache.Write(data));
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Could not cache the video IDs of playlist '{data.Title}'. They are downloaded again next time.", ex);
             }
         }
 
@@ -483,18 +567,30 @@ namespace YouTubeVideoPlayer.Playlists
                 ? _playlists
                 : _playlists.Where(p => p.Key == SelectedKey);
 
-            _pool = sources
+            var pool = sources
                 .Where(p => p.VideoIds.Count > 0)
                 .SelectMany(p => p.VideoIds)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
 
-            SequenceChanged?.Invoke(this, EventArgs.Empty);
+            // A video that was chosen in advance is only out of date if the videos, their order or the way they are
+            // picked changed. A rebuild that changes nothing (e.g. an update that found nothing new) must not drop it.
+            var shuffled = IsShuffled;
+            var sequenceChanged = selectionChanged || shuffled != _poolShuffled || !pool.SequenceEqual(_pool, StringComparer.Ordinal);
+            _pool = pool;
+            _poolShuffled = shuffled;
+
+            if (sequenceChanged)
+                SequenceChanged?.Invoke(this, EventArgs.Empty);
+
             PoolChanged?.Invoke(this, new PoolChangedEventArgs(selectionChanged));
         }
 
         private void Save()
         {
+            if (_libraryLoadFailed)
+                throw new InvalidOperationException("playlists.json could not be read when the application started, so nothing is saved: it would replace the playlists in that file. Restart the application.");
+
             try
             {
                 _store.Save(_library);

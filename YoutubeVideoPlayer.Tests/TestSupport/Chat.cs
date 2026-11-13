@@ -1,4 +1,5 @@
 using NSubstitute;
+using TwitchLib.Client.Interfaces;
 using YouTubeVideoPlayer.Twitch;
 
 namespace YouTubeVideoPlayer.Tests.TestSupport;
@@ -33,6 +34,17 @@ public static class Chat
         channel.SendMessageAsync(Arg.Do<string>(messages.Add)).Returns(Task.CompletedTask);
         sent = messages;
         return channel;
+    }
+
+    /// <summary>
+    /// A substitute <see cref="ITwitchClient"/> that manages to connect. Unconfigured, a substitute answers
+    /// <c>ConnectAsync()</c> with <c>false</c>, which is what TwitchLib reports for a connection that could not be opened.
+    /// </summary>
+    public static ITwitchClient Client()
+    {
+        var client = Substitute.For<ITwitchClient>();
+        client.ConnectAsync().Returns(true);
+        return client;
     }
 
     /// <summary>Raises <see cref="IChatChannel.CommandReceived"/> on the substitute.</summary>
