@@ -79,6 +79,9 @@ namespace YouTubeVideoPlayer
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new ToggleShuffleCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        // The two lists read the registered commands when they run, so new commands appear without changes here.
+                        new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        new ModVodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new SkipVoteCommand(votes),
                         new CancelVoteCommand(votes),
                         new VoteCommand(votes)

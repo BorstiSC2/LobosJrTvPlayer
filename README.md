@@ -106,6 +106,8 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
 | `!shufflestatus` | privileged | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
+| `!vodcommands` | everyone | Lists the commands everyone may use. Built from the registered commands, so new commands appear automatically |
+| `!modvodcommands` | privileged | Lists the commands only moderators, the broadcaster and privileged users may use (also built automatically) |
 | `!token` | privileged | Tells how long the bot's current access token stays valid (the token itself is never posted) |
 | `!skipvote` | privileged | Starts a vote: the bot posts 3 videos from the current playlist (random ones, or the next episodes if it plays in order); 2 minutes after the last option the winner plays |
 | `!vote <n>` | everyone | Votes for option *n* of the running vote (one vote per user; voting again replaces it) |

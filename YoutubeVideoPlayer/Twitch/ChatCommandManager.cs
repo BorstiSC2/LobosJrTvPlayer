@@ -53,6 +53,9 @@ namespace YouTubeVideoPlayer.Twitch
             _chat.CommandReceived += OnCommandReceived;
         }
 
+        /// <summary>The registered commands, in the order they were registered (used to build the command lists).</summary>
+        public IReadOnlyCollection<IChatCommand> Commands => _commands.Values;
+
         /// <summary>Moderators, the broadcaster and the users from the settings' allow list.</summary>
         public bool IsPrivileged(ChatCommandContext context) =>
             context.IsModerator
@@ -89,7 +92,30 @@ namespace YouTubeVideoPlayer.Twitch
 
             var reply = await command.ExecuteAsync(context);
             if (!string.IsNullOrWhiteSpace(reply))
-                await _chat.SendMessageAsync(reply);
+            {
+                foreach (var part in SplitMessage(reply))
+                    await _chat.SendMessageAsync(part);
+            }
+        }
+
+        /// <summary>Twitch accepts 500 characters per message; a longer reply (e.g. a long command list) is split at spaces.</summary>
+        internal const int MaxMessageLength = 450;
+
+        internal static IEnumerable<string> SplitMessage(string message)
+        {
+            var rest = message.Trim();
+            while (rest.Length > MaxMessageLength)
+            {
+                var cut = rest.LastIndexOf(' ', MaxMessageLength);
+                if (cut <= 0)
+                    cut = MaxMessageLength;
+
+                yield return rest[..cut].TrimEnd();
+                rest = rest[cut..].TrimStart();
+            }
+
+            if (rest.Length > 0)
+                yield return rest;
         }
 
         public void Dispose()
