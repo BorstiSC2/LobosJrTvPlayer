@@ -10,7 +10,8 @@ using YouTubeVideoPlayer.YouTube;
 namespace YouTubeVideoPlayer.Twitch.Voting
 {
     /// <summary>
-    /// Runs chat votes for the next video: offers random videos from the current pool, collects
+    /// Runs chat votes for the next video: offers videos from the current playlist (random ones, or the next
+    /// episodes if it plays in order), collects
     /// <c>!vote n</c> messages for a fixed time and then plays the winner (ties are broken randomly).
     /// A vote started with <see cref="StartAfterCurrentAsync"/> is about the video that follows the
     /// current one: its winner is queued and plays when the current video has ended.
