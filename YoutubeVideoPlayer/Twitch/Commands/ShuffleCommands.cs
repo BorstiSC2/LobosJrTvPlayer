@@ -6,8 +6,8 @@ using YouTubeVideoPlayer.Playlists;
 namespace YouTubeVideoPlayer.Twitch.Commands
 {
     /// <summary>
-    /// <c>!shufflestatus</c> (moderators, broadcaster and privileged users): tells whether the playing
-    /// playlist is shuffled (random order) or plays in playlist order.
+    /// <c>!shufflestatus</c> (everybody, it only reads): tells whether the playing playlist is shuffled
+    /// (random order) or plays in playlist order.
     /// </summary>
     public sealed class ShuffleStatusCommand : IChatCommand
     {
@@ -21,7 +21,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "shufflestatus";
 
-        public bool RequiresModerator => true;
+        public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
 

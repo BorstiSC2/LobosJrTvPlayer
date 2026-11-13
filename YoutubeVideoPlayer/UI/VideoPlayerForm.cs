@@ -210,6 +210,16 @@ namespace YouTubeVideoPlayer.UI
 
             if (_twitch != null)
                 _twitch.StateChanged += OnTwitchStateChanged;
+
+            if (_autoVote != null)
+                _autoVote.EnabledChanged += OnAutoVoteEnabledChanged;
+        }
+
+        /// <summary>The Autovote was switched by a chat command: show it in the checkbox.</summary>
+        private void OnAutoVoteEnabledChanged(object? sender, EventArgs e)
+        {
+            if (_autoVote != null)
+                _autoVoteCheckBox.Checked = _autoVote.Enabled;
         }
 
         private void UnsubscribeFromManagers()
@@ -220,6 +230,9 @@ namespace YouTubeVideoPlayer.UI
             _playback.BufferingChanged -= OnBufferingChanged;
             _playback.VolumeChanged -= OnVolumeChanged;
             _coordinator.NoVideosAvailable -= OnNoVideosAvailable;
+
+            if (_autoVote != null)
+                _autoVote.EnabledChanged -= OnAutoVoteEnabledChanged;
 
             if (_twitch != null)
                 _twitch.StateChanged -= OnTwitchStateChanged;

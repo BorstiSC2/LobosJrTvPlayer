@@ -59,6 +59,7 @@ namespace YouTubeVideoPlayer
             var twitch = twitchSettings is { IsComplete: true } ? new TwitchChatService(twitchSettings, twitchTokens) : null;
             SkipVoteManager? votes = null;
             ChatCommandManager? commands = null;
+            AutoVoteManager? autoVote = null;
             if (twitch != null)
             {
                 votes = new SkipVoteManager(
@@ -68,6 +69,7 @@ namespace YouTubeVideoPlayer
                     youtube,
                     TimeSpan.FromSeconds(twitchSettings!.SkipVoteDurationSeconds),
                     SkipVoteManager.OptionCount);
+                autoVote = new AutoVoteManager(twitch, playback, votes);
 
                 commands = new ChatCommandManager(
                     twitch,
@@ -78,6 +80,8 @@ namespace YouTubeVideoPlayer
                         new SkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new ToggleShuffleCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
+                        new AutoVoteStatusCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        new ToggleAutoVoteCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         // The two lists read the registered commands when they run, so new commands appear without changes here.
                         new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
@@ -88,8 +92,6 @@ namespace YouTubeVideoPlayer
                     },
                     twitchSettings.PrivilegedUsers);
             }
-
-            var autoVote = twitch != null && votes != null ? new AutoVoteManager(twitch, playback, votes) : null;
 
             using var coordinator = new AppCoordinator(playback, playlists, twitch);
 

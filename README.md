@@ -19,7 +19,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!skip` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox)
+- Twitch chat bot with `!current`, `!timestamp`, `!skip` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
 
 ---
 
@@ -104,8 +104,10 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!current` | everyone | Replies `Now playing: "<title>" – https://www.youtube.com/watch?v=<id>` |
 | `!timestamp` | everyone | Replies `"<title>" – 03:21 / 10:45 (07:24 left)` |
 | `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
-| `!shufflestatus` | privileged | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
+| `!shufflestatus` | everyone | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
 | `!toggleshuffle` | privileged | Switches the current playlist between random and playlist order, saves it and posts the new status |
+| `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes before a video ends) |
+| `!toggleautovote` | privileged | Switches Autovote on or off (like the checkbox in the control bar, which follows) and posts the new value |
 | `!vodcommands` | everyone | Lists the commands everyone may use. Built from the registered commands, so new commands appear automatically |
 | `!modvodcommands` | privileged | Lists the commands only moderators, the broadcaster and privileged users may use (also built automatically) |
 | `!token` | privileged | Tells how long the bot's current access token stays valid (the token itself is never posted) |
@@ -115,7 +117,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!shufflestatus`, `!toggleshuffle` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!skip`, `!shufflestatus`, `!toggleshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
@@ -130,7 +132,7 @@ The bot also announces itself: it posts a message when it first connects, anothe
 
 ### Autovote
 
-The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on) starts a vote automatically 5 minutes before the current video ends.
+The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on) starts a vote automatically 5 minutes before the current video ends. Chat can ask for its state with `!autovotestatus` and moderators can switch it with `!toggleautovote`; the checkbox follows such a change.
 
 - The vote is about the video that plays **after** the current one. The rules message says so ("Vote for the video that plays AFTER the current one ...") and so does the result ("It plays after the current video.").
 - The winner is queued and starts when the current video ends; the current video is not interrupted. If the video is skipped before it ends, the queued winner plays next.

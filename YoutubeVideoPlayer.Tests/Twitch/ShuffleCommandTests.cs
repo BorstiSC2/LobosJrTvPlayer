@@ -20,7 +20,7 @@ public class ShuffleCommandTests
     }
 
     [Fact]
-    public void Metadata_BothCommandsAreForModeratorsBroadcasterAndPrivilegedUsersOnly()
+    public void Metadata_TheStatusIsForEverybody_TheToggleOnlyForModeratorsBroadcasterAndPrivilegedUsers()
     {
         var control = Control(true);
         IChatCommand[] commands =
@@ -30,7 +30,8 @@ public class ShuffleCommandTests
         };
 
         Assert.Equal(new[] { "shufflestatus", "toggleshuffle" }, commands.Select(c => c.Name));
-        Assert.All(commands, c => Assert.True(c.RequiresModerator));
+        Assert.False(commands[0].RequiresModerator);
+        Assert.True(commands[1].RequiresModerator);
         Assert.All(commands, c => Assert.Equal(TimeSpan.FromSeconds(3), c.Cooldown));
     }
 
@@ -116,7 +117,7 @@ public class ShuffleCommandTests
     }
 
     [Fact]
-    public void OnlyModeratorsBroadcasterAndPrivilegedUsersCanUseThem_ThroughTheCommandManager() => UiContext.Run(async () =>
+    public void EverybodyCanAskTheStatus_OnlyModeratorsBroadcasterAndPrivilegedUsersCanToggle_ThroughTheCommandManager() => UiContext.Run(async () =>
     {
         var chat = Chat.Channel(out var sent);
         var control = Control(true);
@@ -128,17 +129,20 @@ public class ShuffleCommandTests
             new FakeTimeProvider());
 
         chat.Say("!toggleshuffle", user: "viewer");
-        chat.Say("!shufflestatus", user: "viewer");
         await Async.SettleAsync();
         Assert.Empty(sent);
         control.DidNotReceive().ToggleShuffle();
+
+        chat.Say("!shufflestatus", user: "viewer"); // read-only: everybody may ask
+        await Async.SettleAsync();
+        Assert.Single(sent);
 
         chat.Say("!shufflestatus", user: "viewer2", moderator: true);
         chat.Say("!toggleshuffle", user: "streamer", broadcaster: true);
         chat.Say("!toggleshuffle", user: "friend"); // listed in privilegedUsers
         await Async.SettleAsync();
 
-        Assert.Equal(3, sent.Count);
+        Assert.Equal(4, sent.Count);
         control.Received(2).ToggleShuffle();
     });
 }

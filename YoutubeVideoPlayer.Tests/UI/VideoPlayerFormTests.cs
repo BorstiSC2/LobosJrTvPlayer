@@ -411,6 +411,18 @@ public class VideoPlayerFormTests
     }, sta: true);
 
     [Fact]
+    public void WhenTheAutovoteIsSwitchedThroughChat_TheCheckboxFollows() => UiContext.Run(() =>
+    {
+        using var app = new App(Substitute.For<ITwitchClient>());
+
+        app.AutoVote!.Enabled = true;
+        Assert.True(app.AutoVoteCheckBox.Checked);
+
+        app.AutoVote.Enabled = false;
+        Assert.False(app.AutoVoteCheckBox.Checked);
+    }, sta: true);
+
+    [Fact]
     public void TheCheckboxSitsInTheControlBar_NextToTheButtons() => UiContext.Run(async () =>
     {
         using var app = new App(Substitute.For<ITwitchClient>());
