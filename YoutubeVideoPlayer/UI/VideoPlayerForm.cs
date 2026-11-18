@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
@@ -29,10 +30,11 @@ namespace YouTubeVideoPlayer.UI
         private readonly TwitchTokenManager? _twitchTokens;
         private readonly string _twitchBotName;
         private readonly AutoVoteManager? _autoVote;
+        private readonly IReadOnlyList<IVoteDisplay> _voteDisplays;
 
         private readonly VideoView _videoView;
         private readonly Panel _controlPanel;
-        private readonly Label _titleLabel;
+        private readonly TitleStrip _titleStrip;
         private readonly Label _volumeLabel;
         private readonly Label _bufferingLabel;
         private readonly Label _waitingLabel;
@@ -47,6 +49,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly System.Windows.Forms.Timer _volumeDisplayTimer;
         private readonly System.Windows.Forms.Timer _bufferingAnimationTimer;
         private readonly System.Windows.Forms.Timer _waitingCountdownTimer;
+        private readonly System.Windows.Forms.Timer _voteTickerTimer;
         private int _bufferingAnimationFrame;
         private bool _showingWaiting;
         private bool _updatingVolumeSlider;
@@ -56,6 +59,7 @@ namespace YouTubeVideoPlayer.UI
         /// <param name="twitchTokens">Set when the bot signs in through the app; enables the sign-in dialog.</param>
         /// <param name="twitchBotName">The expected bot login from the settings (may be empty).</param>
         /// <param name="autoVote">Set when the Twitch bot is on; enables the "Autovote" checkbox.</param>
+        /// <param name="voteDisplays">The chat votes whose options the ticker at the bottom shows while they run.</param>
         public VideoPlayerForm(
             PlaybackManager playback,
             PlaylistManager playlists,
@@ -64,9 +68,11 @@ namespace YouTubeVideoPlayer.UI
             TwitchChatService? twitch,
             TwitchTokenManager? twitchTokens = null,
             string twitchBotName = "",
-            AutoVoteManager? autoVote = null)
+            AutoVoteManager? autoVote = null,
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null)
         {
             _autoVote = autoVote;
+            _voteDisplays = voteDisplays ?? Array.Empty<IVoteDisplay>();
             _playback = playback;
             _playlists = playlists;
             _coordinator = coordinator;
@@ -87,8 +93,10 @@ namespace YouTubeVideoPlayer.UI
             _videoView = new VideoView { Dock = DockStyle.Fill, BackColor = Color.Black };
             Controls.Add(_videoView);
 
-            _titleLabel = CreateOverlayLabel(600, 25, 10, ContentAlignment.MiddleLeft, AnchorStyles.Left | AnchorStyles.Bottom);
-            _titleLabel.AutoEllipsis = true;
+            // The title, or during a chat vote a ticker with the options (cross-faded inside one strip).
+            _titleStrip = new TitleStrip();
+            Controls.Add(_titleStrip);
+            _titleStrip.BringToFront();
             _volumeLabel = CreateOverlayLabel(100, 40, 10, ContentAlignment.MiddleCenter, AnchorStyles.Top | AnchorStyles.Right);
             _bufferingLabel = CreateOverlayLabel(150, 50, 14, ContentAlignment.MiddleLeft, AnchorStyles.None);
             _waitingLabel = CreateOverlayLabel(480, 50, 14, ContentAlignment.MiddleCenter, AnchorStyles.None);
@@ -96,6 +104,10 @@ namespace YouTubeVideoPlayer.UI
             // While the next video waits for a vote, the time left counts down once a second.
             _waitingCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _waitingCountdownTimer.Tick += (_, __) => UpdateWaitingText();
+
+            // While a vote is shown, its time left counts down once a second.
+            _voteTickerTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _voteTickerTimer.Tick += (_, __) => UpdateVoteTicker();
 
             _volumeDisplayTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             _volumeDisplayTimer.Tick += (_, __) =>
@@ -150,7 +162,7 @@ namespace YouTubeVideoPlayer.UI
             _toolTip.SetToolTip(
                 _autoVoteCheckBox,
                 _autoVote != null
-                    ? "Starts a chat vote 5 minutes before the video ends. The winner plays after the current video.\n" +
+                    ? $"Starts a chat vote {SkipVoteManager.FormatDuration(_autoVote.LeadTime)} before the video ends. The winner plays after the current video.\n" +
                       "A video too short for a 2-minute vote is followed by a black screen until the vote is over."
                     : "Needs the Twitch bot (see twitchsettings.json).");
             _controlPanel.Controls.Add(_autoVoteCheckBox);
@@ -224,6 +236,9 @@ namespace YouTubeVideoPlayer.UI
 
             if (_autoVote != null)
                 _autoVote.EnabledChanged += OnAutoVoteEnabledChanged;
+
+            foreach (var votes in _voteDisplays)
+                votes.DisplayChanged += OnVoteDisplayChanged;
         }
 
         /// <summary>The Autovote was switched by a chat command: show it in the checkbox.</summary>
@@ -244,6 +259,9 @@ namespace YouTubeVideoPlayer.UI
 
             if (_autoVote != null)
                 _autoVote.EnabledChanged -= OnAutoVoteEnabledChanged;
+
+            foreach (var votes in _voteDisplays)
+                votes.DisplayChanged -= OnVoteDisplayChanged;
 
             if (_twitch != null)
                 _twitch.StateChanged -= OnTwitchStateChanged;
@@ -310,19 +328,11 @@ namespace YouTubeVideoPlayer.UI
 
         private void UpdateTitleLabelPosition()
         {
-            // Measure text width and set label width to content (with padding), clamped to video width
-            var paddingHoriz = _titleLabel.Padding.Left + _titleLabel.Padding.Right;
-            var measured = TextRenderer.MeasureText(_titleLabel.Text ?? string.Empty, _titleLabel.Font);
-            var desiredWidth = measured.Width + paddingHoriz;
-            var maxWidth = Math.Max(100, _videoView.ClientSize.Width - 20);
-            _titleLabel.Width = Math.Min(desiredWidth, maxWidth);
-
-            // position label 10px from left and 10px from bottom of the video view (relative to form)
+            // 10 px from the left and the bottom of the video; the strip sizes itself to its text (the ticker to all of it).
             var videoBounds = _videoView.Bounds;
-            var x = videoBounds.Left + 10;
-            var y = Math.Max(10, videoBounds.Bottom - _titleLabel.Height - 10);
-            _titleLabel.Location = new Point(x, y);
-            _titleLabel.BringToFront();
+            _titleStrip.AvailableWidth = Math.Max(100, _videoView.ClientSize.Width - 20);
+            _titleStrip.BottomLeft = new Point(videoBounds.Left + 10, Math.Max(40, videoBounds.Bottom - 10));
+            _titleStrip.BringToFront();
         }
 
         private void CenterOverlay(Label label)
@@ -333,11 +343,28 @@ namespace YouTubeVideoPlayer.UI
             label.BringToFront();
         }
 
+        /// <summary>Shows a title (empty hides it). During a vote it is kept behind the ticker and comes back afterwards.</summary>
         private void ShowTitle(string text)
         {
-            _titleLabel.Text = text;
-            _titleLabel.Visible = !string.IsNullOrWhiteSpace(text);
+            _titleStrip.Title = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
             UpdateTitleLabelPosition();
+        }
+
+        private void OnVoteDisplayChanged(object? sender, EventArgs e) => UpdateVoteTicker();
+
+        /// <summary>
+        /// While a chat vote runs, the strip at the bottom scrolls its options, counts and time left instead of the title.
+        /// Only one vote runs at a time.
+        /// </summary>
+        private void UpdateVoteTicker()
+        {
+            var display = _voteDisplays.Select(v => v.Display).FirstOrDefault(d => d != null);
+            _titleStrip.TickerText = display == null ? null : VoteTickerText.Format(display);
+
+            if (display == null)
+                _voteTickerTimer.Stop();
+            else if (!_voteTickerTimer.Enabled)
+                _voteTickerTimer.Start();
         }
 
         #endregion
@@ -580,6 +607,7 @@ namespace YouTubeVideoPlayer.UI
             _volumeDisplayTimer.Dispose();
             _bufferingAnimationTimer.Dispose();
             _waitingCountdownTimer.Dispose();
+            _voteTickerTimer.Dispose();
             _toolTip.Dispose();
             _videoView.MediaPlayer = null;
         }

@@ -139,14 +139,14 @@ public class CurrentCommandTests
     }
 }
 
-public class SkipCommandTests
+public class ForceSkipCommandTests
 {
     [Fact]
     public void Metadata()
     {
-        var command = new SkipCommand(Substitute.For<IPlaybackControl>(), TimeSpan.FromSeconds(3));
+        var command = new ForceSkipCommand(Substitute.For<IPlaybackControl>(), TimeSpan.FromSeconds(3));
 
-        Assert.Equal("skip", command.Name);
+        Assert.Equal("forceskip", command.Name);
         Assert.True(command.RequiresModerator);
         Assert.Equal(TimeSpan.FromSeconds(3), command.Cooldown);
     }
@@ -156,9 +156,9 @@ public class SkipCommandTests
     {
         var playback = Substitute.For<IPlaybackControl>();
         playback.Current.Returns(new NowPlaying("v1", "Boring video", null));
-        var command = new SkipCommand(playback, TimeSpan.Zero);
+        var command = new ForceSkipCommand(playback, TimeSpan.Zero);
 
-        var reply = await command.ExecuteAsync(Chat.Command("!skip", user: "mod"));
+        var reply = await command.ExecuteAsync(Chat.Command("!forceskip", user: "mod"));
 
         await playback.Received(1).SkipAsync();
         Assert.Equal("Skipped \"Boring video\" (requested by MOD).", reply);
@@ -168,9 +168,9 @@ public class SkipCommandTests
     public async Task WithoutCurrentVideo_UsesAGenericReply()
     {
         var playback = Substitute.For<IPlaybackControl>();
-        var command = new SkipCommand(playback, TimeSpan.Zero);
+        var command = new ForceSkipCommand(playback, TimeSpan.Zero);
 
-        var reply = await command.ExecuteAsync(Chat.Command("!skip", user: "mod"));
+        var reply = await command.ExecuteAsync(Chat.Command("!forceskip", user: "mod"));
 
         Assert.Equal("Skipped to the next video (requested by MOD).", reply);
     }
@@ -180,9 +180,9 @@ public class SkipCommandTests
     {
         var playback = Substitute.For<IPlaybackControl>();
         playback.SkipAsync().ThrowsAsync(new InvalidOperationException("no videos"));
-        var command = new SkipCommand(playback, TimeSpan.Zero);
+        var command = new ForceSkipCommand(playback, TimeSpan.Zero);
 
-        var reply = await command.ExecuteAsync(Chat.Command("!skip"));
+        var reply = await command.ExecuteAsync(Chat.Command("!forceskip"));
         await Async.SettleAsync();
 
         Assert.NotNull(reply);

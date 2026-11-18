@@ -55,9 +55,59 @@ public class TwitchSettingsTests
         Assert.Equal(5, settings.TimestampCooldownSeconds);
         Assert.Equal(3, settings.SkipCooldownSeconds);
         Assert.Equal(120, settings.SkipVoteDurationSeconds);
+        Assert.Equal(300, settings.AutoVoteLeadTimeSeconds);
         Assert.Equal(5, settings.CurrentCooldownSeconds);
         Assert.Equal(3, settings.ShuffleCooldownSeconds);
+        Assert.Equal(30, settings.VoteSkipCooldownMinutes);
+        Assert.Equal(75, settings.VoteSkipPercent);
+        Assert.Equal(60, settings.VoteSkipDurationSeconds);
+        Assert.Equal(60, settings.ChatterAverageWindowMinutes);
+        Assert.Equal(5, settings.ChatterAverageBucketMinutes);
+        Assert.Equal(30, settings.VoteInfoCooldownSeconds);
         Assert.Empty(settings.PrivilegedUsers);
+    }
+
+    [Theory]
+    [InlineData("voteSkipCooldownMinutes", 0, 1)]
+    [InlineData("voteSkipCooldownMinutes", 45, 45)]
+    [InlineData("voteSkipCooldownMinutes", 99999, 1440)]
+    [InlineData("voteSkipPercent", 0, 1)]
+    [InlineData("voteSkipPercent", 50, 50)]
+    [InlineData("voteSkipPercent", 150, 100)]
+    [InlineData("voteSkipDurationSeconds", 1, 15)]
+    [InlineData("voteSkipDurationSeconds", 90, 90)]
+    [InlineData("voteSkipDurationSeconds", 99999, 600)]
+    [InlineData("chatterAverageWindowMinutes", 1, 5)]
+    [InlineData("chatterAverageWindowMinutes", 30, 30)]
+    [InlineData("chatterAverageWindowMinutes", 99999, 1440)]
+    [InlineData("voteInfoCooldownSeconds", 5, 30)]
+    [InlineData("voteInfoCooldownSeconds", 45, 45)]
+    [InlineData("voteInfoCooldownSeconds", 99999, 3600)]
+    public void Load_ClampsTheVoteSkipSettings(string key, int configured, int expected)
+    {
+        var settings = LoadFrom($"{{ \"{key}\": {configured} }}")!;
+        var value = key switch
+        {
+            "voteSkipCooldownMinutes" => settings.VoteSkipCooldownMinutes,
+            "voteSkipPercent" => settings.VoteSkipPercent,
+            "voteSkipDurationSeconds" => settings.VoteSkipDurationSeconds,
+            "chatterAverageWindowMinutes" => settings.ChatterAverageWindowMinutes,
+            _ => settings.VoteInfoCooldownSeconds
+        };
+
+        Assert.Equal(expected, value);
+    }
+
+    [Theory]
+    [InlineData(60, 0, 1)]
+    [InlineData(60, 10, 10)]
+    [InlineData(60, 999, 60)]   // never more than an hour
+    [InlineData(20, 30, 20)]    // never longer than the window
+    public void Load_ClampsTheBucketLength(int window, int bucket, int expected)
+    {
+        var settings = LoadFrom($"{{ \"chatterAverageWindowMinutes\": {window}, \"chatterAverageBucketMinutes\": {bucket} }}")!;
+
+        Assert.Equal(expected, settings.ChatterAverageBucketMinutes);
     }
 
     [Theory]
@@ -67,6 +117,15 @@ public class TwitchSettingsTests
     public void Load_ClampsTheVoteDuration(int configured, int expected)
     {
         Assert.Equal(expected, LoadFrom($"{{ \"skipVoteDurationSeconds\": {configured} }}")!.SkipVoteDurationSeconds);
+    }
+
+    [Theory]
+    [InlineData(1, 60)]
+    [InlineData(420, 420)]
+    [InlineData(99999, 3600)]
+    public void Load_ClampsTheAutoVoteLeadTime(int configured, int expected)
+    {
+        Assert.Equal(expected, LoadFrom($"{{ \"autoVoteLeadTimeSeconds\": {configured} }}")!.AutoVoteLeadTimeSeconds);
     }
 
     [Theory]
@@ -104,5 +163,6 @@ public class TwitchSettingsTests
         Assert.True(settings.IsComplete);
         Assert.True(settings.UsesAppSignIn);
         Assert.Equal(2, settings.PrivilegedUsers.Count);
+        Assert.Equal(300, settings.AutoVoteLeadTimeSeconds);
     }
 }

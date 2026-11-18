@@ -51,6 +51,10 @@ public static class Chat
     public static void Say(this IChatChannel channel, ChatCommandContext command) =>
         channel.CommandReceived += Raise.Event<EventHandler<ChatCommandContext>>(channel, command);
 
+    /// <summary>Raises <see cref="IChatChannel.MessageReceived"/> on the substitute: <paramref name="user"/> wrote something.</summary>
+    public static void Chatter(this IChatChannel channel, string user = "viewer", string? userId = null) =>
+        channel.MessageReceived += Raise.Event<EventHandler<ChatMessageInfo>>(channel, new ChatMessageInfo(userId ?? "id-" + user, user));
+
     public static void Say(this IChatChannel channel, string text, string user = "viewer", string? userId = null,
         bool moderator = false, bool broadcaster = false) =>
         channel.Say(Command(text, user, userId, moderator, broadcaster));

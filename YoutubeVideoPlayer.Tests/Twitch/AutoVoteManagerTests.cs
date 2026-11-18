@@ -16,7 +16,7 @@ public class AutoVoteManagerTests
     /// <summary>An autovote on top of a real vote manager; the player is a substitute whose position the test sets.</summary>
     private sealed class Setup : IDisposable
     {
-        public Setup(TimeSpan? voteDuration = null, bool connected = true)
+        public Setup(TimeSpan? voteDuration = null, bool connected = true, TimeSpan? leadTime = null, Func<bool>? isOtherVoteRunning = null)
         {
             Chat = TestSupport.Chat.Channel(out var sent);
             Sent = sent;
@@ -35,7 +35,7 @@ public class AutoVoteManagerTests
 
             Votes = new SkipVoteManager(
                 Chat, Playback, Videos, YouTube, voteDuration ?? TimeSpan.FromMinutes(2), SkipVoteManager.OptionCount, Time, new Random(1));
-            AutoVote = new AutoVoteManager(Chat, Playback, Votes, Time);
+            AutoVote = new AutoVoteManager(Chat, Playback, Votes, Time, leadTime, isOtherVoteRunning);
         }
 
         public FakeTimeProvider Time { get; } = new();
@@ -108,7 +108,45 @@ public class AutoVoteManagerTests
     }
 
     [Fact]
-    public void TheVoteStartsFiveMinutesBeforeTheEnd() => Assert.Equal(TimeSpan.FromMinutes(5), AutoVoteManager.LeadTime);
+    public void WhileAVoteSkipRuns_NoAutovoteStarts_ItFollowsWhenThatVoteIsOver() => UiContext.Run(async () =>
+    {
+        var voteSkipRunning = true;
+        using var setup = new Setup(isOtherVoteRunning: () => voteSkipRunning);
+        setup.AutoVote.Enabled = true;
+        setup.Remaining(TimeSpan.FromMinutes(4));
+
+        await setup.TickAsync();
+        Assert.False(setup.Votes.IsRunning);
+        Assert.Empty(setup.Sent);
+
+        voteSkipRunning = false;
+        await setup.TickAsync();
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
+    });
+
+    [Fact]
+    public void ByDefault_TheVoteStartsFiveMinutesBeforeTheEnd() => UiContext.Run(() =>
+    {
+        Assert.Equal(TimeSpan.FromMinutes(5), AutoVoteManager.DefaultLeadTime);
+        using var setup = new Setup();
+        Assert.Equal(AutoVoteManager.DefaultLeadTime, setup.AutoVote.LeadTime);
+    });
+
+    [Fact]
+    public void AConfiguredLeadTime_StartsTheVoteThatLongBeforeTheEnd() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(leadTime: TimeSpan.FromMinutes(8));
+        setup.AutoVote.Enabled = true;
+
+        setup.Remaining(TimeSpan.FromMinutes(8) + TimeSpan.FromSeconds(1));
+        await setup.TickAsync();
+        Assert.False(setup.Votes.IsRunning);
+
+        setup.Remaining(TimeSpan.FromMinutes(8));
+        await setup.TickAsync();
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
+        Assert.Contains("AFTER the current one", setup.Sent[0]);
+    });
 
     [Fact]
     public void Constructor_RequiresASynchronizationContext()

@@ -42,6 +42,9 @@
     <None Update="playlists.default.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="twitchsettings.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <!-- Bot credentials stay local (gitignored); copied only if the file exists. -->
     <None Update="twitchsettings.json" Condition="Exists('twitchsettings.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

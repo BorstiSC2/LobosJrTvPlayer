@@ -9,6 +9,13 @@
   "skipCooldownSeconds": 3,
   "shuffleCooldownSeconds": 3,
   "skipVoteDurationSeconds": 120,
+  "autoVoteLeadTimeSeconds": 300,
+  "voteSkipDurationSeconds": 60,
+  "voteSkipPercent": 75,
+  "voteSkipCooldownMinutes": 30,
+  "chatterAverageWindowMinutes": 60,
+  "chatterAverageBucketMinutes": 5,
+  "voteInfoCooldownSeconds": 30,
   "privilegedUsers": [
     "your_login_name",
     "123456789"

@@ -60,6 +60,8 @@ namespace YouTubeVideoPlayer
             SkipVoteManager? votes = null;
             ChatCommandManager? commands = null;
             AutoVoteManager? autoVote = null;
+            ChatActivityTracker? chatters = null;
+            VoteSkipManager? voteSkip = null;
             PlaylistAnnouncer? announcer = null;
             if (twitch != null)
             {
@@ -70,7 +72,26 @@ namespace YouTubeVideoPlayer
                     youtube,
                     TimeSpan.FromSeconds(twitchSettings!.SkipVoteDurationSeconds),
                     SkipVoteManager.OptionCount);
-                autoVote = new AutoVoteManager(twitch, playback, votes);
+                chatters = new ChatActivityTracker(
+                    twitch,
+                    TimeSpan.FromMinutes(twitchSettings.ChatterAverageWindowMinutes),
+                    TimeSpan.FromMinutes(twitchSettings.ChatterAverageBucketMinutes));
+                var chatterAverage = chatters;
+                voteSkip = new VoteSkipManager(
+                    twitch,
+                    playback,
+                    votes,
+                    () => chatterAverage.AverageUniqueChatters,
+                    TimeSpan.FromSeconds(twitchSettings.VoteSkipDurationSeconds),
+                    TimeSpan.FromMinutes(twitchSettings.VoteSkipCooldownMinutes),
+                    twitchSettings.VoteSkipPercent);
+                var runningVoteSkip = voteSkip;
+                autoVote = new AutoVoteManager(
+                    twitch,
+                    playback,
+                    votes,
+                    leadTime: TimeSpan.FromSeconds(twitchSettings.AutoVoteLeadTimeSeconds),
+                    isOtherVoteRunning: () => runningVoteSkip.IsRunning);
                 announcer = new PlaylistAnnouncer(twitch, playlists, playback);
 
                 commands = new ChatCommandManager(
@@ -79,7 +100,7 @@ namespace YouTubeVideoPlayer
                     {
                         new TimestampCommand(playback, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new CurrentCommand(playback, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
-                        new SkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
+                        new ForceSkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new PlayCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new PauseCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
@@ -94,26 +115,45 @@ namespace YouTubeVideoPlayer
                         // The two lists read the registered commands when they run, so new commands appear without changes here.
                         new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new ModVodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
-                        new SkipVoteCommand(votes),
-                        new CancelVoteCommand(votes),
-                        new VoteCommand(votes)
+                        new VoteSkipCommand(voteSkip, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
+                        new VoteInfoCommand(votes, voteSkip, TimeSpan.FromSeconds(twitchSettings.VoteInfoCooldownSeconds)),
+                        new ForceVoteSkipCommand(votes, voteSkip),
+                        new CancelVoteCommand(votes, voteSkip),
+                        // Ballots: not listed by !vodcommands, the votes name them.
+                        new VoteCommand(votes),
+                        new SkipBallotCommand(voteSkip),
+                        new StayBallotCommand(voteSkip)
                     },
                     twitchSettings.PrivilegedUsers);
             }
 
             using var coordinator = new AppCoordinator(playback, playlists, twitch);
-            using var swapScheduler = new PlaylistSwapScheduler(playlists, playback, votes == null ? null : () => votes.IsRunning);
+            using var swapScheduler = new PlaylistSwapScheduler(
+                playlists,
+                playback,
+                votes == null ? null : () => votes.IsRunning || voteSkip!.IsRunning,
+                autoVoteLeadTime: autoVote?.LeadTime);
 
             try
             {
                 Application.Run(new VideoPlayerForm(
-                    playback, playlists, coordinator, player.MediaPlayer, twitch, twitchTokens, twitchSettings?.BotUsername ?? string.Empty, autoVote));
+                    playback,
+                    playlists,
+                    coordinator,
+                    player.MediaPlayer,
+                    twitch,
+                    twitchTokens,
+                    twitchSettings?.BotUsername ?? string.Empty,
+                    autoVote,
+                    votes == null ? null : new IVoteDisplay[] { voteSkip!, votes }));
             }
             finally
             {
                 autoVote?.Dispose();
                 announcer?.Dispose();
                 commands?.Dispose();
+                voteSkip?.Dispose();
+                chatters?.Dispose();
                 votes?.Dispose();
                 if (twitch != null)
                 {

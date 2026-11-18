@@ -40,17 +40,41 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>Minimum time between two <c>!current</c> replies, to stay below Twitch's rate limits.</summary>
         public int CurrentCooldownSeconds { get; set; } = 5;
 
-        /// <summary>Minimum time between two <c>!skip</c> commands, so two mods cannot skip two videos at once.</summary>
+        /// <summary>Minimum time between two <c>!forceskip</c> commands, so two mods cannot skip two videos at once.</summary>
         public int SkipCooldownSeconds { get; set; } = 3;
 
         /// <summary>Minimum time between two <c>!shufflestatus</c> / <c>!toggleshuffle</c> commands (each has its own).</summary>
         public int ShuffleCooldownSeconds { get; set; } = 3;
 
         /// <summary>
-        /// How long a <c>!skipvote</c> runs (counted from the moment the last option has been posted)
+        /// How long a <c>!forcevoteskip</c> vote runs (counted from the moment the last option has been posted)
         /// before the winner is played.
         /// </summary>
         public int SkipVoteDurationSeconds { get; set; } = 120;
+
+        /// <summary>How long before the end of a video the Autovote starts its vote about the next one.</summary>
+        public int AutoVoteLeadTimeSeconds { get; set; } = 300;
+
+        /// <summary>How long nobody can use <c>!voteskip</c> after a vote in which the chat chose to stay.</summary>
+        public int VoteSkipCooldownMinutes { get; set; } = 30;
+
+        /// <summary>
+        /// The share of the average unique chatters (in percent) that has to type <c>!skip</c> for a <c>!voteskip</c>
+        /// vote to succeed (besides more <c>!skip</c> than <c>!stay</c>).
+        /// </summary>
+        public int VoteSkipPercent { get; set; } = 75;
+
+        /// <summary>How long a <c>!voteskip</c> vote (<c>!skip</c> or <c>!stay</c>) runs.</summary>
+        public int VoteSkipDurationSeconds { get; set; } = 60;
+
+        /// <summary>How far back the rolling average of unique chatters reaches.</summary>
+        public int ChatterAverageWindowMinutes { get; set; } = 60;
+
+        /// <summary>The length of one bucket of the rolling average; each bucket counts the different chatters in it.</summary>
+        public int ChatterAverageBucketMinutes { get; set; } = 5;
+
+        /// <summary>Minimum time between two <c>!voteinfo</c> replies (at least 30 seconds).</summary>
+        public int VoteInfoCooldownSeconds { get; set; } = 30;
 
         /// <summary>
         /// Login names or numeric user IDs that may use moderator-only commands even without being
@@ -90,6 +114,14 @@ namespace YouTubeVideoPlayer.Twitch
                     .Where(u => u.Length > 0)
                     .ToList();
                 settings.SkipVoteDurationSeconds = Math.Clamp(settings.SkipVoteDurationSeconds, 15, 1800);
+                settings.AutoVoteLeadTimeSeconds = Math.Clamp(settings.AutoVoteLeadTimeSeconds, 60, 3600);
+                settings.VoteSkipCooldownMinutes = Math.Clamp(settings.VoteSkipCooldownMinutes, 1, 1440);
+                settings.VoteSkipPercent = Math.Clamp(settings.VoteSkipPercent, 1, 100);
+                settings.VoteSkipDurationSeconds = Math.Clamp(settings.VoteSkipDurationSeconds, 15, 600);
+                settings.ChatterAverageWindowMinutes = Math.Clamp(settings.ChatterAverageWindowMinutes, 5, 1440);
+                settings.ChatterAverageBucketMinutes = Math.Clamp(
+                    settings.ChatterAverageBucketMinutes, 1, Math.Min(60, settings.ChatterAverageWindowMinutes));
+                settings.VoteInfoCooldownSeconds = Math.Clamp(settings.VoteInfoCooldownSeconds, 30, 3600);
                 return settings;
             }
             catch (Exception ex)

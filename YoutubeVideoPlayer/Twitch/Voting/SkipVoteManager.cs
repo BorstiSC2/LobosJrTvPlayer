@@ -17,7 +17,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     /// current one: its winner is queued and plays when the current video has ended.
     /// </summary>
     /// <remarks>All members must be called on the UI thread (chat commands are delivered there).</remarks>
-    public sealed class SkipVoteManager : IDisposable
+    public sealed class SkipVoteManager : IVoteDisplay, IDisposable
     {
         /// <summary>How many videos a vote offers.</summary>
         public const int OptionCount = 3;
@@ -67,6 +67,34 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         public bool IsRunning => _session != null;
 
+        public event EventHandler? DisplayChanged;
+
+        /// <summary>The running vote for the vote ticker, once its options are known; <c>null</c> otherwise.</summary>
+        public VoteDisplay? Display
+        {
+            get
+            {
+                var session = _session;
+                if (session == null || session.Options.Count == 0)
+                    return null;
+
+                var counts = new int[session.Options.Count];
+                foreach (var choice in session.Votes.Values)
+                    counts[choice]++;
+
+                var options = session.Options
+                    .Select((o, i) => new VoteDisplayOption($"{i + 1}) {Shorten(o.Title)}", $"!vote {i + 1}", counts[i]))
+                    .ToList();
+                var headline = session.AfterCurrent ? "VOTE NOW for the video after this one!" : "VOTE NOW for the next video!";
+                TimeSpan? left = session.EndsAt is { } endsAt ? Max(TimeSpan.Zero, endsAt - _time.GetUtcNow()) : null;
+                return new VoteDisplay(headline, options, null, left);
+            }
+        }
+
+        private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+        private void OnDisplayChanged() => DisplayChanged?.Invoke(this, EventArgs.Empty);
+
         /// <summary>The standard length of a vote (the countdown after the last option has been posted).</summary>
         public TimeSpan Duration => _duration;
 
@@ -74,8 +102,38 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// Starts a vote whose winner plays right away. Returns a reply for the chat if the vote could
         /// not be started.
         /// </summary>
-        public Task<string?> StartAsync(ChatCommandContext context) =>
-            StartCoreAsync(context.Username, afterCurrent: false, _duration);
+        public Task<string?> StartAsync(ChatCommandContext context) => StartAsync(context.Username);
+
+        /// <inheritdoc cref="StartAsync(ChatCommandContext)"/>
+        /// <param name="startedBy">Who started the vote, for the log (e.g. <c>!voteskip</c>).</param>
+        public Task<string?> StartAsync(string startedBy) =>
+            StartCoreAsync(startedBy, afterCurrent: false, _duration);
+
+        /// <summary>
+        /// What <c>!voteinfo</c> says about the running vote: its options and the time left; <c>null</c> without a vote.
+        /// </summary>
+        public string? DescribeForChat()
+        {
+            var session = _session;
+            if (session == null)
+                return null;
+
+            if (session.Options.Count == 0)
+                return "A vote for the next video is being prepared.";
+
+            var options = string.Join(", ", session.Options.Select((o, i) => $"{i + 1}) {Shorten(o.Title)}"));
+            var left = session.EndsAt is { } endsAt
+                ? $"{FormatTimeLeft(endsAt - _time.GetUtcNow())} left."
+                : $"Voting ends {FormatDuration(session.Duration)} after the last option.";
+            return $"{Headline(session)} {options} – vote with !vote 1-{session.Options.Count}. {left}";
+        }
+
+        /// <summary>"1:05" (minutes and seconds, rounded up); never negative.</summary>
+        internal static string FormatTimeLeft(TimeSpan left)
+        {
+            var seconds = (int)Math.Ceiling(Math.Max(0, left.TotalSeconds));
+            return $"{seconds / 60}:{seconds % 60:00}";
+        }
 
         /// <summary>
         /// Starts a vote about the video that plays <i>after</i> the current one (used by the automatic
@@ -155,6 +213,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             if (session.Hold != null)
                 session.Hold.Until = _time.GetUtcNow() + MessageDelay * options.Count + session.Duration;
 
+            OnDisplayChanged();
+
             RunVoteAsync(session).FireAndForget("The skip vote failed.");
             return null;
         }
@@ -183,7 +243,11 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 return;
 
             var voterKey = string.IsNullOrEmpty(context.UserId) ? context.Username : context.UserId;
+            if (session.Votes.TryGetValue(voterKey, out var earlier) && earlier == number - 1)
+                return;
+
             session.Votes[voterKey] = number - 1;
+            OnDisplayChanged();
         }
 
         private async Task RunVoteAsync(VoteSession session)
@@ -223,8 +287,11 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             }
 
             // Now the end is exact (sending may have taken longer than planned).
+            session.EndsAt = _time.GetUtcNow() + session.Duration;
             if (session.Hold != null)
-                session.Hold.Until = _time.GetUtcNow() + session.Duration;
+                session.Hold.Until = session.EndsAt;
+
+            OnDisplayChanged();
 
             // Remind the chat halfway through longer votes.
             var reminderAt = session.Duration >= TimeSpan.FromSeconds(60) ? session.Duration / 2 : TimeSpan.Zero;
@@ -374,7 +441,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         private static string Votes(int count) => count == 1 ? "1 vote" : $"{count} votes";
 
-        private static string FormatDuration(TimeSpan duration)
+        /// <summary>"30 seconds", "1 minute", "90 seconds", "5 minutes": whole minutes as minutes, anything else as seconds.</summary>
+        internal static string FormatDuration(TimeSpan duration)
         {
             if (duration.TotalSeconds >= 60 && duration.Seconds == 0)
                 return duration.TotalMinutes == 1 ? "1 minute" : $"{(int)duration.TotalMinutes} minutes";
@@ -382,7 +450,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             return $"{(int)Math.Round(duration.TotalSeconds)} seconds";
         }
 
-        private static string Shorten(string title) =>
+        internal static string Shorten(string title) =>
             title.Length <= MaxTitleLength ? title : title[..(MaxTitleLength - 1)].TrimEnd() + "…";
 
         /// <param name="releaseHold">
@@ -391,6 +459,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// </param>
         private void EndSession(VoteSession session, bool releaseHold = true)
         {
+            var wasShown = ReferenceEquals(_session, session) && session.Options.Count > 0;
             if (ReferenceEquals(_session, session))
                 _session = null;
 
@@ -400,6 +469,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             session.Hold = null;
             if (releaseHold)
                 hold?.Release();
+
+            if (wasShown)
+                OnDisplayChanged();
         }
 
         public void Dispose()
@@ -421,6 +493,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             /// <summary>The countdown after the last option has been posted (shortened if the options took long to find).</summary>
             public TimeSpan Duration { get; set; }
+
+            /// <summary>When the countdown ends; <c>null</c> until it has started (the options are still being posted).</summary>
+            public DateTimeOffset? EndsAt { get; set; }
 
             /// <summary>The vote is about the video after the current one; the winner is queued, not played at once.</summary>
             public bool AfterCurrent { get; }

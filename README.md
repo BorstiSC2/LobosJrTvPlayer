@@ -21,7 +21,9 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!skip`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!skipvote`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- Twitch chat bot with `!current`, `!timestamp`, `!forceskip`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- While a chat vote runs, a ticker at the bottom of the video scrolls the options with their live vote counts and the time left (it cross-fades with the video title)
+- Viewers can ask the chat to skip a video with `!voteskip` (`!skip` / `!stay`); it needs a configurable share of the recent chatters, and a vote to stay blocks it for 30 minutes
 
 ---
 
@@ -87,7 +89,7 @@ Example `playlists.json`:
 
 Below the list in the **Playlists** dialog, the switch **Swap playlists automatically every [7] days [0] hours** lets the playlists take turns: when the interval is up, the next playlist of the list takes over (after the last one the first; after **All playlists** the first one). With **Pick the next playlist at random** it is a random other playlist instead (never the one that is playing). Playlists that could not be loaded are skipped, and **All playlists** is never swapped to. The line below the switches says when the next swap is due and which playlist comes next ("a random playlist" if there is more than one to pick from).
 
-- The video that is playing when the time is up is **not interrupted**. About 5½ minutes before it ends, the next playlist is selected, so the video after it comes from the next playlist – and so do the options of an **Autovote**, which starts 5 minutes before the end. A video that is shorter than that is followed by the next playlist straight away. While a vote about the next video runs or its winner is waiting, the swap waits for the end of the winner's video.
+- The video that is playing when the time is up is **not interrupted**. Half a minute before an **Autovote** would start (5½ minutes before the end with the default `autoVoteLeadTimeSeconds`), the next playlist is selected, so the video after it comes from the next playlist – and so do the options of the Autovote. A video that is shorter than that is followed by the next playlist straight away. While a vote about the next video runs or its winner is waiting, the swap waits for the end of the winner's video.
 - While the app is paused before the first **Play**, the next playlist takes over at once and its first video is prepared.
 - The interval counts from the **last change**: an automatic swap, a switch by hand (**Switch to playlist**, `!skipplaylist`), or a change of the setting (turning it on or off, another interval). Switching the random order does not start it over, since it does not change when the swap happens; chat can ask for it with `!playlistshufflestatus` and moderators can switch it with `!toggleplaylistshuffle`. The setting and the time of the last change are saved in `playlists.json`, so a restart does not reset the interval; a swap that fell due while the app was closed happens right after the next start.
 - It needs at least two playlists; removing playlists until only one is left turns it off.
@@ -98,7 +100,7 @@ Below the list in the **Playlists** dialog, the switch **Swap playlists automati
 Every playlist has its own order, saved as `shuffle` in `playlists.json` (playlists without the value are shuffled, as before):
 
 - **Random order** (default): the next video is picked at random, never the one that just ended.
-- **In order**: the videos play one after the other as in the YouTube playlist, and start over after the last one. **Next** and `!skip` only go to the next video, and so does the end of a video. The playlist **continues where it left off** when it plays again – after another playlist, or after a restart of the app: with the video after the one that last played to its end, or, if that video was cut off (another playlist was selected, the app was closed), with the same video again from its start. The first time, it starts with the first video. Where it is, is saved with the playlist in `playlists.json`; if an update removed that video, the playlist continues at the same position.
+- **In order**: the videos play one after the other as in the YouTube playlist, and start over after the last one. **Next** and `!forceskip` only go to the next video, and so does the end of a video. The playlist **continues where it left off** when it plays again – after another playlist, or after a restart of the app: with the video after the one that last played to its end, or, if that video was cut off (another playlist was selected, the app was closed), with the same video again from its start. The first time, it starts with the first video. Where it is, is saved with the playlist in `playlists.json`; if an update removed that video, the playlist continues at the same position.
 
 Change it in the **Playlists** dialog (the **Random order** column of the list has a checkbox for each playlist: checked = random, unchecked = in order) or with the chat commands `!shufflestatus` / `!toggleshuffle`. **All playlists** combined always plays in random order, because there is no common order.
 
@@ -119,7 +121,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 |---------|-----|--------------|
 | `!current` | everyone | Replies `Now playing: "<title>" – https://www.youtube.com/watch?v=<id>` |
 | `!timestamp` | everyone | Replies `"<title>" – 03:21 / 10:45 (07:24 left)` |
-| `!skip` | privileged | Skips to the next video (the next one in order, or a random one if the playlist is shuffled) |
+| `!forceskip` | privileged | Skips to the next video at once, without a vote (the next one in order, or a random one if the playlist is shuffled) |
 | `!pause` | privileged | Pauses the current video |
 | `!play` | privileged | Continues a paused video, or starts the first video while the player still waits for the first Play |
 | `!shufflestatus` | everyone | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
@@ -128,18 +130,21 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!skipplaylist` | privileged | Switches to the next playlist now (the current video is skipped); the bot then announces `New Playlist has begun: <name>` |
 | `!playlistshufflestatus` | everyone | Tells whether the next playlist is picked at random or the playlists take turns in the order of the list |
 | `!toggleplaylistshuffle` | privileged | Switches between a random next playlist and the order of the list (like the switch in the playlist dialog) and posts the new value |
-| `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes before a video ends) |
+| `!autovotestatus` | everyone | Tells whether Autovote is on (a vote for the next video starts by itself 5 minutes, or `autoVoteLeadTimeSeconds`, before a video ends) |
 | `!toggleautovote` | privileged | Switches Autovote on or off (like the checkbox in the control bar, which follows) and posts the new value |
 | `!vodcommands` | everyone | Lists the commands everyone may use. Built from the registered commands, so new commands appear automatically |
 | `!modvodcommands` | privileged | Lists the commands only moderators, the broadcaster and privileged users may use (also built automatically) |
 | `!token` | privileged | Tells how long the bot's current access token stays valid (the token itself is never posted) |
-| `!skipvote` | privileged | Starts a vote: the bot posts 3 videos from the current playlist (random ones, or the next episodes if it plays in order); 2 minutes after the last option the winner plays |
+| `!voteskip` | everyone | Asks the chat whether the current video is skipped: a 1-minute vote with `!skip` and `!stay` (see [Vote to skip](#vote-to-skip)) |
+| `!skip` / `!stay` | everyone | Ballots in a running `!voteskip` vote (one per user; voting again replaces it). They do nothing otherwise |
+| `!voteinfo` | everyone | Tells whether a vote is running and repeats it: the options and the time left, or the `!skip` / `!stay` standing (cooldown 30 seconds, `voteInfoCooldownSeconds`) |
+| `!forcevoteskip` | privileged | Starts a vote: the bot posts 3 videos from the current playlist (random ones, or the next episodes if it plays in order); 2 minutes after the last option the winner plays |
 | `!vote <n>` | everyone | Votes for option *n* of the running vote (one vote per user; voting again replaces it) |
-| `!cancelvote` | privileged | Cancels the running vote; the current video keeps playing |
+| `!cancelvote` | privileged | Cancels the running vote (a `!voteskip` vote too); the current video keeps playing |
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!skip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands` and `!token` have a short cooldown to stay within Twitch's chat rate limits.
+`!current`, `!timestamp`, `!forceskip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands`, `!voteskip` and `!token` have a short cooldown to stay within Twitch's chat rate limits. `!vodcommands` does not list the ballots `!vote`, `!skip` and `!stay`; the votes name them.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
@@ -152,14 +157,25 @@ The bot also announces itself: it posts a message when it first connects, anothe
 - The options never include the video that is currently playing. Unavailable videos are replaced automatically.
 - Only one vote can run at a time.
 
+### Vote to skip
+
+Any viewer can ask the chat to skip the current video with `!voteskip`:
+
+- The bot announces a vote of 1 minute (`voteSkipDurationSeconds`): type `!skip` or `!stay`. The viewer who started it counts as `!skip`. Every user has one ballot; voting again replaces it. Halfway through, the bot posts the standing.
+- Skipping needs **more `!skip` than `!stay`** and **at least 75 % (`voteSkipPercent`) of the recent chatters** as `!skip` votes, rounded up and at least one. The announcement says how many that is. "Recent chatters" is a rolling average: the bot counts the different users who wrote anything in chat per 5 minutes (`chatterAverageBucketMinutes`) and averages these counts over the last 60 minutes (`chatterAverageWindowMinutes`). Periods nobody wrote in count as zero; the time before the app started does not count. The number is taken when the vote starts.
+- If skipping wins, the regular vote for the next video (the 3 options, as with `!forcevoteskip`) starts at once. If that vote cannot start (too few videos), the video is skipped directly.
+- If the chat stays (or `!skip` won without enough votes, or it is a tie), the video keeps playing and `!voteskip` cannot be used for 30 minutes (`voteSkipCooldownMinutes`). The bot says when it can be used again.
+- A vote that is interrupted has no result and starts no cooldown: when the video changes meanwhile, or a moderator ends it with `!cancelvote`.
+- Only one vote runs at a time: `!voteskip` is refused while a vote for the next video runs, `!forcevoteskip` while a `!voteskip` vote runs, and the Autovote waits until it is over. Nothing plays (the player waits for the first Play or for a vote): no `!voteskip`.
+
 ### Autovote
 
-The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on) starts a vote automatically 5 minutes before the current video ends. Chat can ask for its state with `!autovotestatus` and moderators can switch it with `!toggleautovote`; the checkbox follows such a change.
+The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on) starts a vote automatically 5 minutes before the current video ends (`autoVoteLeadTimeSeconds` in `twitchsettings.json` changes that). Chat can ask for its state with `!autovotestatus` and moderators can switch it with `!toggleautovote`; the checkbox follows such a change.
 
 - The vote is about the video that plays **after** the current one. The rules message says so ("Vote for the video that plays AFTER the current one ...") and so does the result ("It plays after the current video.").
 - The winner is queued and starts when the current video ends; the current video is not interrupted. If the video is skipped before it ends, the queued winner plays next.
 - The vote is shortened if needed so that it is over (with a safety margin) before the video ends; the time it takes to look up the options counts too. Videos without a known length (live streams) get no vote.
-- A video too short for a 2-minute vote (or for the configured vote length, if that is shorter) still gets a vote of that length, and the next video waits for it: when the short video is over, the screen goes black with "Waiting for vote to finish... 1:23" counting down every second, and the winner starts as soon as the vote ends. The rules message says so ("The next video starts when voting has ended."). **Next** or `!skip` starts the next video at once (the winner then plays after it), and `!cancelvote` ends the wait.
+- A video too short for a 2-minute vote (or for the configured vote length, if that is shorter) still gets a vote of that length, and the next video waits for it: when the short video is over, the screen goes black with "Waiting for vote to finish... 1:23" counting down every second, and the winner starts as soon as the vote ends. The rules message says so ("The next video starts when voting has ended."). **Next** or `!forceskip` starts the next video at once (the winner then plays after it), and `!cancelvote` ends the wait.
 - There is one vote per video, and nothing happens while the bot is not connected to the chat or another vote is running. Switching playlists drops a queued winner.
 - Unchecking the box only prevents new votes; a vote that is already running finishes. The box starts unchecked on every start.
 
@@ -193,6 +209,13 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
   "skipCooldownSeconds": 3,
   "shuffleCooldownSeconds": 3,
   "skipVoteDurationSeconds": 120,
+  "autoVoteLeadTimeSeconds": 300,
+  "voteSkipDurationSeconds": 60,
+  "voteSkipPercent": 75,
+  "voteSkipCooldownMinutes": 30,
+  "chatterAverageWindowMinutes": 60,
+  "chatterAverageBucketMinutes": 5,
+  "voteInfoCooldownSeconds": 30,
   "privilegedUsers": [
     "your_login_name",
     "123456789"
@@ -206,6 +229,13 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
 - `oAuthToken`: leave empty (only for the manual token, see below).
 - `privilegedUsers`: login names or numeric Twitch user IDs that may use the privileged commands without being a moderator, e.g. your own account for testing. User IDs keep working if an account is renamed.
 - `skipVoteDurationSeconds`: 15 to 1800; counted from the moment the last option has been posted.
+- `autoVoteLeadTimeSeconds`: 60 to 3600 (default 300); how long before the end of a video the Autovote starts its vote. The automatic playlist swap happens 30 seconds earlier.
+- `voteSkipDurationSeconds`: 15 to 600 (default 60); how long a `!voteskip` vote runs.
+- `voteSkipPercent`: 1 to 100 (default 75); the share of the recent chatters that has to vote `!skip`.
+- `voteSkipCooldownMinutes`: 1 to 1440 (default 30); how long `!voteskip` is blocked after the chat chose to stay.
+- `chatterAverageWindowMinutes`: 5 to 1440 (default 60); how far back the average of recent chatters reaches.
+- `chatterAverageBucketMinutes`: 1 to 60 (default 5), at most the window; the period in which the different chatters are counted.
+- `voteInfoCooldownSeconds`: 30 to 3600 (default 30); the minimum time between two `!voteinfo` replies.
 
 `twitchsettings.json` is ignored by git and copied to the output directory on build. Without it (or with `"enabled": false`) the bot is off and the player works as usual.
 

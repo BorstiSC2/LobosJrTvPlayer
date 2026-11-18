@@ -31,6 +31,23 @@ public class CommandListTests
     }
 
     [Fact]
+    public void HiddenCommands_AreNotListed() => UiContext.Run(async () =>
+    {
+        var chat = Chat.Channel(out var sent);
+        var ballot = Command("stay", false);
+        ballot.IsHidden.Returns(true);
+        var modBallot = Command("secret", true);
+        modBallot.IsHidden.Returns(true);
+        using var manager = CreateManager(chat, Command("voteskip", false), ballot, Command("forceskip", true), modBallot);
+
+        chat.Say("!vodcommands");
+        chat.Say("!modvodcommands", moderator: true);
+        await Async.SettleAsync();
+
+        Assert.Equal(new[] { "Commands: !voteskip", "Moderator commands: !forceskip" }, sent);
+    });
+
+    [Fact]
     public void Metadata_VodCommandsIsForEverybody_ModVodCommandsOnlyForModerators()
     {
         IChatCommand everybody = new VodCommandsCommand(() => Array.Empty<IChatCommand>(), TimeSpan.FromSeconds(5));

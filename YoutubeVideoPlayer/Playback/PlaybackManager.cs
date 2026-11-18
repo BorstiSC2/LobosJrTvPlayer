@@ -610,7 +610,7 @@ namespace YouTubeVideoPlayer.Playback
 
             var video = resolved != null
                 ? await resolved.WaitAsync(cancellationToken)
-                : await _youtube.ResolveAsync(idOrUrl, cancellationToken);
+                : await VideoLookup.ResolveAsync(_youtube, idOrUrl, _time, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             // Everything the player reports from here on belongs to the new video; late events of the
