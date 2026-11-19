@@ -19,6 +19,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "forcevoteskip";
 
+        public string Description =>
+            "Starts a vote right away in which chat picks the next video to play.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown => TimeSpan.Zero; // a running vote blocks a second one anyway
@@ -46,6 +49,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "cancelvote";
 
+        public string Description =>
+            "Stops the vote that is running. The current video keeps playing.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown => TimeSpan.Zero;
@@ -62,6 +68,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public VoteCommand(SkipVoteManager votes) => _votes = votes;
 
         public string Name => "vote";
+
+        public string Description =>
+            "Your vote while chat picks the next video. Type !vote and the number of your choice, for example !vote 2.";
 
         public bool RequiresModerator => false;
 

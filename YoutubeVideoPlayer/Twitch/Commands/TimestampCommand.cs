@@ -17,6 +17,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "timestamp";
 
+        public string Description =>
+            "Shows how far into the current video we are and how much of it is left.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }

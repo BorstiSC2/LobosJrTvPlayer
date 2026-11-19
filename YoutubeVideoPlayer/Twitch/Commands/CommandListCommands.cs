@@ -32,6 +32,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "vodcommands";
 
+        public string Description =>
+            "Lists all the commands everyone can use.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -56,6 +59,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "modvodcommands";
+
+        public string Description =>
+            "Lists all the commands only moderators can use.";
 
         public bool RequiresModerator => true;
 

@@ -21,6 +21,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "token";
 
+        public string Description =>
+            "Shows how long the bot's current login to Twitch stays valid.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown { get; }
