@@ -91,8 +91,8 @@ public class VlcMediaPlayerTests
         using var finished = new ManualResetEventSlim();
         player.EncounteredError += (_, _) => finished.Set();
         player.EndReached += (_, _) => finished.Set();
-        Assert.Empty(player.RecentLog());
 
+        // (VLC may log warnings while it starts, e.g. on a machine without a sound device such as the CI runner.)
         // Starting somewhere in the file must not get in the way of the error either.
         player.Play(Path.Combine(Path.GetTempPath(), "ytp-tests-missing.mp4"), null, TimeSpan.FromMinutes(50));
 
