@@ -4,7 +4,7 @@
   "botUsername": "your_bot_account",
   "oAuthToken": "",
   "channel": "your_channel",
-  "timestampCooldownSeconds": 5,
+  "otherCommandsCooldownSeconds": 5,
   "currentCooldownSeconds": 5,
   "skipCooldownSeconds": 3,
   "shuffleCooldownSeconds": 3,

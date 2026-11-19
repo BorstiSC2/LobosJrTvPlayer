@@ -98,7 +98,6 @@ namespace YouTubeVideoPlayer
                     twitch,
                     new IChatCommand[]
                     {
-                        new TimestampCommand(playback, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new CurrentCommand(playback, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
                         new ForceSkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ReloadCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
@@ -110,12 +109,12 @@ namespace YouTubeVideoPlayer
                         new SkipPlaylistCommand(playlists, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new PlaylistShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
                         new TogglePlaylistShuffleCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),
-                        new AutoVoteStatusCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
-                        new ToggleAutoVoteCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
-                        new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        new AutoVoteStatusCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.OtherCommandsCooldownSeconds)),
+                        new ToggleAutoVoteCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.OtherCommandsCooldownSeconds)),
+                        new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.OtherCommandsCooldownSeconds)),
                         // The two lists read the registered commands when they run, so new commands appear without changes here.
-                        new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
-                        new ModVodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.OtherCommandsCooldownSeconds)),
+                        new ModVodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.OtherCommandsCooldownSeconds)),
                         new VoteSkipCommand(voteSkip, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
                         new VoteInfoCommand(votes, voteSkip, TimeSpan.FromSeconds(twitchSettings.VoteInfoCooldownSeconds)),
                         new ForceVoteSkipCommand(votes, voteSkip),

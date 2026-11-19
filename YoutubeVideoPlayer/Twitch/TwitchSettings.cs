@@ -34,8 +34,12 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>The channel to join, without the leading <c>#</c>.</summary>
         public string Channel { get; set; } = string.Empty;
 
-        /// <summary>Minimum time between two <c>!timestamp</c> replies, to stay below Twitch's rate limits.</summary>
-        public int TimestampCooldownSeconds { get; set; } = 5;
+        /// <summary>
+        /// Minimum time between two replies of each command that has no cooldown setting of its own
+        /// (<c>!autovotestatus</c>, <c>!toggleautovote</c>, <c>!token</c>, <c>!vodcommands</c>, <c>!modvodcommands</c>),
+        /// to stay below Twitch's rate limits. Formerly <c>timestampCooldownSeconds</c>.
+        /// </summary>
+        public int OtherCommandsCooldownSeconds { get; set; } = 5;
 
         /// <summary>Minimum time between two <c>!current</c> replies, to stay below Twitch's rate limits.</summary>
         public int CurrentCooldownSeconds { get; set; } = 5;

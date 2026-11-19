@@ -5,7 +5,10 @@ using YouTubeVideoPlayer.YouTube;
 
 namespace YouTubeVideoPlayer.Twitch.Commands
 {
-    /// <summary><c>!current</c>: posts the title of the video that is playing and a link to it on YouTube.</summary>
+    /// <summary>
+    /// <c>!current</c>: posts the title of the video that is playing, its position (with the length and the
+    /// time left, if the length is known) and a link to it on YouTube.
+    /// </summary>
     public sealed class CurrentCommand : IChatCommand
     {
         private readonly IPlaybackControl _playback;
@@ -31,7 +34,23 @@ namespace YouTubeVideoPlayer.Twitch.Commands
             var title = string.IsNullOrWhiteSpace(current.Title) ? "The current video" : $"\"{current.Title}\"";
             var url = YouTubeService.ToUrl(current.VideoId);
 
-            return Task.FromResult<string?>($"Now playing: {title} – {url}");
+            return Task.FromResult<string?>($"Now playing: {title} – {DescribePosition()} – {url}");
         }
+
+        private string DescribePosition()
+        {
+            var position = _playback.Position;
+            if (_playback.Length is not { } total || total <= TimeSpan.Zero)
+                return Format(position);
+
+            var remaining = total - position;
+            if (remaining < TimeSpan.Zero)
+                remaining = TimeSpan.Zero;
+
+            return $"{Format(position)} / {Format(total)} ({Format(remaining)} left)";
+        }
+
+        private static string Format(TimeSpan time) =>
+            time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
     }
 }

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Windows Forms app (.NET 10, `net10.0-windows`) that plays videos from YouTube playlists in a loop, in random or playlist order (per playlist), optionally swapping to the next playlist after a set interval.
 - YoutubeExplode resolves the streams and playlist contents; the official YouTube API is not used.
 - LibVLCSharp plays the streams.
-- An optional Twitch chat bot (TwitchLib.Client 4.x) answers `!current`, `!timestamp`, `!forceskip`, `!reload`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and `!token` (remaining token validity, never the token), announces a new playlist, and runs chat votes for the next video (`!forcevoteskip`, `!vote n`, `!cancelvote`, `!voteinfo`, and the Autovote option). Viewers can ask the chat to skip the current video with `!voteskip` (ballots `!skip` / `!stay`), measured against a rolling average of unique chatters.
+- An optional Twitch chat bot (TwitchLib.Client 4.x) answers `!current` (title, position and time left, link), `!forceskip`, `!reload`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and `!token` (remaining token validity, never the token), announces a new playlist, and runs chat votes for the next video (`!forcevoteskip`, `!vote n`, `!cancelvote`, `!voteinfo`, and the Autovote option). Viewers can ask the chat to skip the current video with `!voteskip` (ballots `!skip` / `!stay`), measured against a rolling average of unique chatters.
 
 ## Commands
 
@@ -102,6 +102,7 @@ dotnet test YoutubeVideoPlayer.Tests/YoutubeVideoPlayer.Tests.csproj --filter "F
 - `Twitch/ChatCommandManager` routes commands from an `IChatChannel` to `IChatCommand` implementations in `Twitch/Commands/`.
   - Permission checks: `RequiresModerator` allows moderators, the broadcaster and `TwitchSettings.PrivilegedUsers` (login names or user IDs). Anyone else is ignored silently.
   - The per-command cooldown is shared by all users; a cooldown of zero disables it (and its logging, so `!vote` doesn't flood the log).
+  - Cooldowns come from `twitchsettings.json` and are assigned in `Program.cs`: `CurrentCooldownSeconds`, `SkipCooldownSeconds`, `ShuffleCooldownSeconds`, `VoteInfoCooldownSeconds`, and `OtherCommandsCooldownSeconds` for the commands without a setting of their own (`!autovotestatus`, `!toggleautovote`, `!token`, the command lists). It replaced `timestampCooldownSeconds` (removed with `!timestamp`; the old name is not read).
   - To add a command, implement `IChatCommand` and register it in `Program.cs`.
   - Renamed for the viewer vote-skip: the moderator skip is `!forceskip` (`ForceSkipCommand`), the moderator vote `!forcevoteskip` (`ForceVoteSkipCommand`); `!skip` is now only a ballot.
 - `Twitch/Voting/SkipVoteManager`: one vote at a time.

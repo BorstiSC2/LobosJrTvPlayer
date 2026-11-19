@@ -112,18 +112,18 @@ public class ChatCommandManagerTests
     {
         var time = new FakeTimeProvider();
         var chat = Chat.Channel(out var sent);
-        var timestamp = Command("timestamp", cooldown: TimeSpan.FromSeconds(5), reply: "03:21");
-        using var manager = new ChatCommandManager(chat, new[] { timestamp }, Array.Empty<string>(), time);
+        var current = Command("current", cooldown: TimeSpan.FromSeconds(5), reply: "03:21");
+        using var manager = new ChatCommandManager(chat, new[] { current }, Array.Empty<string>(), time);
 
-        chat.Say("!timestamp", user: "a");
-        chat.Say("!timestamp", user: "b");
+        chat.Say("!current", user: "a");
+        chat.Say("!current", user: "b");
         time.Advance(TimeSpan.FromSeconds(4.9));
-        chat.Say("!timestamp", user: "c");
+        chat.Say("!current", user: "c");
         await Async.SettleAsync();
         Assert.Single(sent);
 
         time.Advance(TimeSpan.FromSeconds(0.1));
-        chat.Say("!timestamp", user: "d");
+        chat.Say("!current", user: "d");
         await Async.SettleAsync();
         Assert.Equal(2, sent.Count);
     });
