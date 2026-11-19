@@ -1,6 +1,6 @@
 # YouTube Video Player
 
-A lightweight Windows Forms application for playing YouTube videos from your playlists (in random or playlist order) using **LibVLCSharp** and **YoutubeExplode**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and timestamp and mods skip videos.
+A lightweight Windows Forms application for playing YouTube videos from your playlists (in random or playlist order) using **LibVLCSharp** and **YoutubeExplode**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and its position and mods skip videos.
 
 ---
 
@@ -21,7 +21,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!forceskip`, `!reload`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- Twitch chat bot with `!current`, `!forceskip`, `!reload`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
 - While a chat vote runs, a ticker at the bottom of the video shows an orange "Vote" (or "Skip this video?") badge and the time left, and scrolls the options with a live bar and count each, the leader highlighted (it cross-fades with the video title, which has the same look, as do the buffering, reconnecting and waiting labels)
 - Viewers can ask the chat to skip a video with `!voteskip` (`!skip` / `!stay`); it needs a configurable share of the recent chatters, and a vote to stay blocks it for 30 minutes
 
@@ -119,8 +119,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 | Command | Who | What it does |
 |---------|-----|--------------|
-| `!current` | everyone | Replies `Now playing: "<title>" – https://www.youtube.com/watch?v=<id>` |
-| `!timestamp` | everyone | Replies `"<title>" – 03:21 / 10:45 (07:24 left)` |
+| `!current` | everyone | Replies `Now playing: "<title>" – 03:21 / 10:45 (07:24 left) – https://www.youtube.com/watch?v=<id>` (only the position if the length is unknown) |
 | `!forceskip` | privileged | Skips to the next video at once, without a vote (the next one in order, or a random one if the playlist is shuffled) |
 | `!reload` | privileged | Gets fresh stream links for the current video and continues it 3 seconds before where it is (a safety measure when picture or sound misbehave; the video shows "Reloading - continuing at 50:28" meanwhile) |
 | `!pause` | privileged | Pauses the current video |
@@ -145,7 +144,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!forceskip`, `!reload`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands`, `!voteskip` and `!token` have a short cooldown to stay within Twitch's chat rate limits. `!vodcommands` does not list the ballots `!vote`, `!skip` and `!stay`; the votes name them.
+`!current`, `!forceskip`, `!reload`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands`, `!voteskip` and `!token` have a short cooldown to stay within Twitch's chat rate limits (the `…CooldownSeconds` settings in `twitchsettings.json`, see below). `!vodcommands` does not list the ballots `!vote`, `!skip` and `!stay`; the votes name them.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 
@@ -205,7 +204,7 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
   "botUsername": "your_bot_account",
   "oAuthToken": "",
   "channel": "your_channel",
-  "timestampCooldownSeconds": 5,
+  "otherCommandsCooldownSeconds": 5,
   "currentCooldownSeconds": 5,
   "skipCooldownSeconds": 3,
   "shuffleCooldownSeconds": 3,
@@ -229,6 +228,10 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
 - `botUsername`: optional; if set, the sign-in warns when you log in with a different account.
 - `oAuthToken`: leave empty (only for the manual token, see below).
 - `privilegedUsers`: login names or numeric Twitch user IDs that may use the privileged commands without being a moderator, e.g. your own account for testing. User IDs keep working if an account is renamed.
+- `currentCooldownSeconds` (default 5): the cooldown of `!current`, `!playlist` and `!voteskip`.
+- `skipCooldownSeconds` (default 3): the cooldown of `!forceskip`, `!reload`, `!play`, `!pause` and `!skipplaylist`.
+- `shuffleCooldownSeconds` (default 3): the cooldown of `!shufflestatus`, `!toggleshuffle`, `!playlistshufflestatus` and `!toggleplaylistshuffle`.
+- `otherCommandsCooldownSeconds` (default 5): the cooldown of each command without a setting of its own (`!autovotestatus`, `!toggleautovote`, `!token`, `!vodcommands`, `!modvodcommands`, `!commandhelp`). It replaces `timestampCooldownSeconds`, which is no longer read: rename it in an existing `twitchsettings.json`, otherwise the default applies.
 - `skipVoteDurationSeconds`: 15 to 1800; counted from the moment the last option has been posted.
 - `autoVoteLeadTimeSeconds`: 60 to 3600 (default 300); how long before the end of a video the Autovote starts its vote. The automatic playlist swap happens 30 seconds earlier.
 - `voteSkipDurationSeconds`: 15 to 600 (default 60); how long a `!voteskip` vote runs.

@@ -6,91 +6,17 @@ using YouTubeVideoPlayer.Twitch.Commands;
 
 namespace YouTubeVideoPlayer.Tests.Twitch;
 
-public class TimestampCommandTests
+public class CurrentCommandTests
 {
-    private static (TimestampCommand Command, IPlaybackControl Playback) Create(
-        string? title, TimeSpan position, TimeSpan? length, bool playing = true)
+    private static CurrentCommand Create(
+        string? videoId, string title = "Elden Ring", bool playing = true,
+        TimeSpan position = default, TimeSpan? length = null)
     {
         var playback = Substitute.For<IPlaybackControl>();
-        playback.Current.Returns(title == null ? null : new NowPlaying("v1", title, length));
+        playback.Current.Returns(videoId == null ? null : new NowPlaying(videoId, title, length));
         playback.IsPlaying.Returns(playing);
         playback.Position.Returns(position);
         playback.Length.Returns(length);
-        return (new TimestampCommand(playback, TimeSpan.FromSeconds(5)), playback);
-    }
-
-    [Fact]
-    public void Metadata()
-    {
-        var (command, _) = Create("x", TimeSpan.Zero, null);
-
-        Assert.Equal("timestamp", command.Name);
-        Assert.False(command.RequiresModerator);
-        Assert.Equal(TimeSpan.FromSeconds(5), command.Cooldown);
-    }
-
-    [Fact]
-    public async Task ReportsPositionLengthAndRemainingTime()
-    {
-        var (command, _) = Create("Elden Ring", TimeSpan.FromSeconds(201), TimeSpan.FromSeconds(645));
-
-        var reply = await command.ExecuteAsync(Chat.Command("!timestamp"));
-
-        Assert.Equal("\"Elden Ring\" – 03:21 / 10:45 (07:24 left)", reply);
-    }
-
-    [Fact]
-    public async Task UsesHoursForLongVideos()
-    {
-        var (command, _) = Create("Marathon", new TimeSpan(1, 2, 3), new TimeSpan(10, 0, 0));
-
-        var reply = await command.ExecuteAsync(Chat.Command("!timestamp"));
-
-        Assert.Equal("\"Marathon\" – 1:02:03 / 10:00:00 (8:57:57 left)", reply);
-    }
-
-    [Fact]
-    public async Task WithoutKnownLength_ReportsOnlyThePosition()
-    {
-        var (command, _) = Create("Live", TimeSpan.FromSeconds(75), null);
-
-        Assert.Equal("\"Live\" – 01:15", await command.ExecuteAsync(Chat.Command("!timestamp")));
-    }
-
-    [Fact]
-    public async Task RemainingTime_NeverGoesNegative()
-    {
-        var (command, _) = Create("x", TimeSpan.FromSeconds(70), TimeSpan.FromSeconds(60));
-
-        Assert.EndsWith("(00:00 left)", await command.ExecuteAsync(Chat.Command("!timestamp")));
-    }
-
-    [Fact]
-    public async Task UntitledVideo_IsCalledTheCurrentVideo()
-    {
-        var (command, _) = Create("  ", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
-
-        Assert.StartsWith("The current video – 00:01", await command.ExecuteAsync(Chat.Command("!timestamp")));
-    }
-
-    [Theory]
-    [InlineData(true, false)]  // nothing loaded
-    [InlineData(false, true)]  // loaded but not playing
-    public async Task WhenNothingPlays_SaysSo(bool noVideo, bool notPlaying)
-    {
-        var (command, _) = Create(noVideo ? null : "x", TimeSpan.Zero, null, playing: !notPlaying);
-
-        Assert.Equal("Nothing is playing right now.", await command.ExecuteAsync(Chat.Command("!timestamp")));
-    }
-}
-
-public class CurrentCommandTests
-{
-    private static CurrentCommand Create(string? videoId, string title = "Elden Ring", bool playing = true)
-    {
-        var playback = Substitute.For<IPlaybackControl>();
-        playback.Current.Returns(videoId == null ? null : new NowPlaying(videoId, title, null));
-        playback.IsPlaying.Returns(playing);
         return new CurrentCommand(playback, TimeSpan.FromSeconds(5));
     }
 
@@ -105,11 +31,41 @@ public class CurrentCommandTests
     }
 
     [Fact]
-    public async Task PostsTheTitleAndALinkToTheVideo()
+    public async Task PostsTheTitleThePositionAndALinkToTheVideo()
     {
-        var reply = await Create("dQw4w9WgXcQ").ExecuteAsync(Chat.Command("!current"));
+        var command = Create("dQw4w9WgXcQ", position: TimeSpan.FromSeconds(201), length: TimeSpan.FromSeconds(645));
 
-        Assert.Equal("Now playing: \"Elden Ring\" – https://www.youtube.com/watch?v=dQw4w9WgXcQ", reply);
+        var reply = await command.ExecuteAsync(Chat.Command("!current"));
+
+        Assert.Equal(
+            "Now playing: \"Elden Ring\" – 03:21 / 10:45 (07:24 left) – https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            reply);
+    }
+
+    [Fact]
+    public async Task UsesHoursForLongVideos()
+    {
+        var command = Create("v1", title: "Marathon", position: new TimeSpan(1, 2, 3), length: new TimeSpan(10, 0, 0));
+
+        var reply = await command.ExecuteAsync(Chat.Command("!current"));
+
+        Assert.Equal("Now playing: \"Marathon\" – 1:02:03 / 10:00:00 (8:57:57 left) – https://www.youtube.com/watch?v=v1", reply);
+    }
+
+    [Fact]
+    public async Task WithoutKnownLength_ReportsOnlyThePosition()
+    {
+        var reply = await Create("v1", title: "Live", position: TimeSpan.FromSeconds(75)).ExecuteAsync(Chat.Command("!current"));
+
+        Assert.Equal("Now playing: \"Live\" – 01:15 – https://www.youtube.com/watch?v=v1", reply);
+    }
+
+    [Fact]
+    public async Task RemainingTime_NeverGoesNegative()
+    {
+        var command = Create("v1", position: TimeSpan.FromSeconds(70), length: TimeSpan.FromSeconds(60));
+
+        Assert.Contains("(00:00 left)", await command.ExecuteAsync(Chat.Command("!current")));
     }
 
     [Fact]
@@ -123,9 +79,9 @@ public class CurrentCommandTests
     [Fact]
     public async Task UntitledVideo_IsCalledTheCurrentVideo()
     {
-        var reply = await Create("v1", title: " ").ExecuteAsync(Chat.Command("!current"));
+        var reply = await Create("v1", title: " ", position: TimeSpan.FromSeconds(1)).ExecuteAsync(Chat.Command("!current"));
 
-        Assert.Equal("Now playing: The current video – https://www.youtube.com/watch?v=v1", reply);
+        Assert.Equal("Now playing: The current video – 00:01 – https://www.youtube.com/watch?v=v1", reply);
     }
 
     [Theory]

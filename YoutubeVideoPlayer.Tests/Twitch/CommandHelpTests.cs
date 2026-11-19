@@ -134,7 +134,7 @@ public class CommandHelpTests
         var types = typeof(IChatCommand).Assembly.GetTypes()
             .Where(t => typeof(IChatCommand).IsAssignableFrom(t) && t is { IsClass: true, IsAbstract: false })
             .ToList();
-        Assert.True(types.Count >= 25, $"Only {types.Count} commands found.");
+        Assert.True(types.Count >= 24, $"Only {types.Count} commands found.");
 
         foreach (var type in types)
         {

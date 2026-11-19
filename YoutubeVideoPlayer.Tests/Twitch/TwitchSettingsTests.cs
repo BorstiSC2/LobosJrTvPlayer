@@ -52,7 +52,7 @@ public class TwitchSettingsTests
         var settings = LoadFrom("{ \"channel\": \"c\", \"privilegedUsers\": null }")!;
 
         Assert.True(settings.Enabled);
-        Assert.Equal(5, settings.TimestampCooldownSeconds);
+        Assert.Equal(5, settings.OtherCommandsCooldownSeconds);
         Assert.Equal(3, settings.SkipCooldownSeconds);
         Assert.Equal(120, settings.SkipVoteDurationSeconds);
         Assert.Equal(300, settings.AutoVoteLeadTimeSeconds);
