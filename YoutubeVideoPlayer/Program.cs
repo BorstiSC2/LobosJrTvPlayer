@@ -101,6 +101,7 @@ namespace YouTubeVideoPlayer
                         new TimestampCommand(playback, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new CurrentCommand(playback, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
                         new ForceSkipCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
+                        new ReloadCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new PlayCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new PauseCommand(playback, TimeSpan.FromSeconds(twitchSettings.SkipCooldownSeconds)),
                         new ShuffleStatusCommand(playlists, TimeSpan.FromSeconds(twitchSettings.ShuffleCooldownSeconds)),

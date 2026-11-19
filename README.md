@@ -21,8 +21,8 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
 - Video title overlay
-- Twitch chat bot with `!current`, `!timestamp`, `!forceskip`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
-- While a chat vote runs, a ticker at the bottom of the video scrolls the options with their live vote counts and the time left (it cross-fades with the video title)
+- Twitch chat bot with `!current`, `!timestamp`, `!forceskip`, `!reload`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
+- While a chat vote runs, a ticker at the bottom of the video shows an orange "Vote" (or "Skip this video?") badge and the time left, and scrolls the options with a live bar and count each, the leader highlighted (it cross-fades with the video title, which has the same look, as do the buffering, reconnecting and waiting labels)
 - Viewers can ask the chat to skip a video with `!voteskip` (`!skip` / `!stay`); it needs a configurable share of the recent chatters, and a vote to stay blocks it for 30 minutes
 
 ---
@@ -122,6 +122,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 | `!current` | everyone | Replies `Now playing: "<title>" – https://www.youtube.com/watch?v=<id>` |
 | `!timestamp` | everyone | Replies `"<title>" – 03:21 / 10:45 (07:24 left)` |
 | `!forceskip` | privileged | Skips to the next video at once, without a vote (the next one in order, or a random one if the playlist is shuffled) |
+| `!reload` | privileged | Gets fresh stream links for the current video and continues it 3 seconds before where it is (a safety measure when picture or sound misbehave; the video shows "Reloading - continuing at 50:28" meanwhile) |
 | `!pause` | privileged | Pauses the current video |
 | `!play` | privileged | Continues a paused video, or starts the first video while the player still waits for the first Play |
 | `!shufflestatus` | everyone | Tells whether the current playlist is shuffled (random order) or plays in playlist order |
@@ -144,7 +145,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 **Privileged** means moderators, the broadcaster and the users listed in `privilegedUsers` (see below). Everybody else is ignored silently for these commands.
 
-`!current`, `!timestamp`, `!forceskip`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands`, `!voteskip` and `!token` have a short cooldown to stay within Twitch's chat rate limits. `!vodcommands` does not list the ballots `!vote`, `!skip` and `!stay`; the votes name them.
+`!current`, `!timestamp`, `!forceskip`, `!reload`, `!play`, `!pause`, `!shufflestatus`, `!toggleshuffle`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle`, `!autovotestatus`, `!toggleautovote`, `!vodcommands`, `!modvodcommands`, `!voteskip` and `!token` have a short cooldown to stay within Twitch's chat rate limits. `!vodcommands` does not list the ballots `!vote`, `!skip` and `!stay`; the votes name them.
 
 The bot also announces itself: it posts a message when it first connects, another one when it is back after a lost connection, and a goodbye when the app closes while it is connected. Renewing the access token (a brief reconnect every few hours) stays silent.
 

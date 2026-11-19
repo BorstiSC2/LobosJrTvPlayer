@@ -11,6 +11,17 @@ namespace YouTubeVideoPlayer.Playback
     /// moves on at the end of a video or on errors, and watches for stuck buffering and frozen playback.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// A video whose stream breaks off (it freezes, or the player reports its end well before its length) is resumed
+    /// first: it is looked up again (fresh stream URLs) and started a little before where it stopped. Only after
+    /// <see cref="MaxResumeAttempts"/> resumes in a row that did not get it going does it move on to the next video.
+    /// </para>
+    /// <para>
+    /// Every automatic move is logged with its reason, and a broken stream also with the player's own recent
+    /// warnings and errors (<see cref="IMediaPlayer.RecentLog"/>).
+    /// </para>
+    /// </remarks>
+    /// <remarks>
     /// Must be created on the UI thread. All player events and timer ticks are marshalled onto the
     /// captured <see cref="SynchronizationContext"/>, so every member and event runs on that thread.
     /// </remarks>
@@ -33,6 +44,24 @@ namespace YouTubeVideoPlayer.Playback
         /// <summary>The longest wait for a hold whose end is not known.</summary>
         public static readonly TimeSpan MaxHoldWait = TimeSpan.FromMinutes(5);
 
+        /// <summary>
+        /// An end reported this long (or longer) before the video's known length is not its real end: the stream broke
+        /// off. More than a <see cref="FailSafeInterval"/>, because the position is only known from the watchdog's checks.
+        /// </summary>
+        public static readonly TimeSpan EarlyEndMargin = TimeSpan.FromSeconds(60);
+
+        /// <summary>How often in a row a broken video is resumed before the next video plays instead.</summary>
+        public const int MaxResumeAttempts = 2;
+
+        /// <summary>A resume worked once the video has played this far past the point it resumed at.</summary>
+        public static readonly TimeSpan ResumeSucceededAfter = TimeSpan.FromMinutes(1);
+
+        /// <summary>A resume starts this much before the last known position, so nothing is missed.</summary>
+        public static readonly TimeSpan ResumeRewind = TimeSpan.FromSeconds(3);
+
+        /// <summary>How often a resumed video is checked for having reached its start point (ends <see cref="IsResuming"/>).</summary>
+        public static readonly TimeSpan ResumeCheckInterval = TimeSpan.FromMilliseconds(250);
+
         private readonly SynchronizationContext _context;
         private readonly IYouTubeService _youtube;
         private readonly IVideoSource _videoSource;
@@ -40,6 +69,7 @@ namespace YouTubeVideoPlayer.Playback
         private readonly TimeProvider _time;
         private readonly ContextTimer _bufferingTimeoutTimer;
         private readonly ContextTimer _failSafeTimer;
+        private readonly ContextTimer _resumeCheckTimer;
         private readonly NextVideoPrefetcher _prefetcher;
 
         private CancellationTokenSource? _playNextCancellationTokenSource;
@@ -50,6 +80,12 @@ namespace YouTubeVideoPlayer.Playback
         private DateTimeOffset _waitingSince;
         private bool _failSafeTriggered;
         private long _failSafePlaybackTime = long.MinValue;
+        private long _lastKnownPositionMs = -1;
+        private int _resumeAttempts;
+        private long _resumedAtMs;
+        private bool _isResuming;
+        private bool _isReloading;
+        private long _resumeCheckPositionMs = -1;
         private int _mediaGeneration;
         private bool _isBuffering;
         private bool _isPaused;
@@ -75,6 +111,7 @@ namespace YouTubeVideoPlayer.Playback
 
             _bufferingTimeoutTimer = new ContextTimer(_context, BufferingTimeout, periodic: false, OnBufferingTimeout, _time);
             _failSafeTimer = new ContextTimer(_context, FailSafeInterval, periodic: true, OnFailSafeTick, _time);
+            _resumeCheckTimer = new ContextTimer(_context, ResumeCheckInterval, periodic: true, OnResumeCheckTick, _time);
 
             // While a video plays, the next one is chosen and resolved, so the change has no gap.
             _prefetcher = new NextVideoPrefetcher(_youtube, _videoSource, () => _queuedVideoId, _time);
@@ -168,6 +205,41 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         public bool IsWaitingForHold => _isWaitingForHold;
 
+        /// <summary>
+        /// Whether the stream of the current video broke off and it is being resumed: from the moment that was detected
+        /// until the video plays again at <see cref="ResumePosition"/> (or another video starts, or it gives up).
+        /// </summary>
+        public bool IsResuming => _isResuming;
+
+        /// <summary>Where the video that is being resumed continues; <c>null</c> while nothing is resumed.</summary>
+        public TimeSpan? ResumePosition => _isResuming ? TimeSpan.FromMilliseconds(_resumedAtMs) : null;
+
+        /// <summary>Whether the resume that runs was asked for with <see cref="Reload"/> (not a broken stream).</summary>
+        public bool IsReloading => _isResuming && _isReloading;
+
+        /// <summary>
+        /// Gets fresh stream links for the current video and continues it <see cref="ResumeRewind"/> before where it is,
+        /// like the resume of a broken stream, but asked for (<c>!reload</c>). It does not count as one of the
+        /// <see cref="MaxResumeAttempts"/>, and a paused video plays on.
+        /// </summary>
+        public ReloadResult Reload()
+        {
+            if (_disposed || Current is not { } video || _isStandby || _isWaitingForHold)
+                return ReloadResult.NothingPlaying;
+
+            // A skip, a resume or another reload is looking a video up; this one would cancel it.
+            if (_playNextTask != null)
+                return ReloadResult.Busy;
+
+            // While a resume waits for the video to play on, the player does not know the position (it seeks).
+            var position = _isResuming ? _resumedAtMs + (long)ResumeRewind.TotalMilliseconds
+                : _player.TimeMs > 0 ? _player.TimeMs
+                : Math.Max(0, _lastKnownPositionMs);
+            StopBufferingWatch();
+            StartResume(video, position, reload: true);
+            return ReloadResult.Started;
+        }
+
         /// <summary>While waiting for a hold: how much longer it is expected to last; <c>null</c> if that is not known (or nothing waits).</summary>
         public TimeSpan? HoldRemaining
         {
@@ -182,8 +254,8 @@ namespace YouTubeVideoPlayer.Playback
         }
 
         /// <summary>
-        /// Raised when <see cref="IsStandby"/>, <see cref="IsStandbyReady"/>, <see cref="IsPaused"/> or
-        /// <see cref="IsWaitingForHold"/> changed.
+        /// Raised when <see cref="IsStandby"/>, <see cref="IsStandbyReady"/>, <see cref="IsPaused"/>,
+        /// <see cref="IsWaitingForHold"/> or <see cref="IsResuming"/> changed.
         /// </summary>
         public event EventHandler? StateChanged;
 
@@ -295,8 +367,9 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         public Task PlayNextAsync()
         {
-            // An explicit change does not wait: whatever held the next video back is over.
+            // An explicit change does not wait: whatever held the next video back is over, and so is a resume.
             EndHold();
+            SetResuming(false);
             return RunPlaybackOperationAsync(PlayNextInternalAsync);
         }
 
@@ -307,6 +380,7 @@ namespace YouTubeVideoPlayer.Playback
         public Task PlayVideoAsync(string videoId)
         {
             EndHold();
+            SetResuming(false);
             return RunPlaybackOperationAsync(cancellationToken => PlayVideoInternalAsync(videoId, cancellationToken));
         }
 
@@ -437,6 +511,7 @@ namespace YouTubeVideoPlayer.Playback
 
             _waitingSince = _time.GetUtcNow();
             _failSafeTriggered = false;
+            SetResuming(false);
             SetState(standby: false, paused: false);
             SetWaiting(true);
         }
@@ -618,6 +693,9 @@ namespace YouTubeVideoPlayer.Playback
             Interlocked.Increment(ref _mediaGeneration);
             _failSafeTriggered = false;
             _failSafePlaybackTime = long.MinValue;
+            _lastKnownPositionMs = -1;
+            _resumeAttempts = 0;
+            SetResuming(false);
             SetState(standby: false, paused: false);
 
             _player.Play(video.VideoUrl, video.AudioUrl);
@@ -655,8 +733,29 @@ namespace YouTubeVideoPlayer.Playback
 
         private void OnEndReached()
         {
-            if (Current is { } finished)
-                VideoFinished?.Invoke(this, finished);
+            var video = Current;
+            var position = Math.Max(_player.TimeMs, _lastKnownPositionMs);
+            var length = video?.Duration ?? (_player.LengthMs > 0 ? TimeSpan.FromMilliseconds(_player.LengthMs) : null);
+            var where = $"at {FormatTime(position)} of {(length is { } known ? FormatTime((long)known.TotalMilliseconds) : "an unknown length")}";
+
+            if (video != null && position > 0 && length is { } total
+                && TimeSpan.FromMilliseconds(position) < total - EarlyEndMargin)
+            {
+                // Not the real end: the stream broke off (e.g. the connection was closed and could not be reopened).
+                LogPlayerProblem($"The player reported the end of \"{video.Title}\" ({video.VideoId}) {where}: the stream broke off early.");
+                StopBufferingWatch();
+                if (TryResume())
+                    return;
+
+                AdvanceAutomatically("PlayNextAsync after an early end failed.");
+                return;
+            }
+
+            Logger.Log(video == null
+                ? "The player reported the end of the media; playing the next video."
+                : $"\"{video.Title}\" ({video.VideoId}) ended {where}; playing the next video.");
+            if (video != null)
+                VideoFinished?.Invoke(this, video);
 
             AdvanceAutomatically("PlayNextAsync after EndReached failed.");
         }
@@ -664,16 +763,159 @@ namespace YouTubeVideoPlayer.Playback
         private void OnEncounteredError()
         {
             // Stream error; skip to next video silently
-            Logger.Log("The player encountered an error; skipping to the next video.");
+            LogPlayerProblem("The player encountered an error; skipping to the next video.");
             StopBufferingWatch();
             AdvanceAutomatically("PlayNextAsync after a player error failed.");
         }
 
         private void OnBufferingTimeout()
         {
-            Logger.Log($"Buffering took longer than {BufferingTimeout.TotalSeconds:0} seconds; skipping to the next video.");
+            LogPlayerProblem($"Buffering took longer than {BufferingTimeout.TotalSeconds:0} seconds; skipping to the next video.");
             StopBufferingWatch();
             AdvanceAutomatically("PlayNextAsync after buffering timeout failed.");
+        }
+
+        /// <summary>Logs <paramref name="message"/> with the player's own recent warnings and errors.</summary>
+        private void LogPlayerProblem(string message)
+        {
+            var recent = _player.RecentLog();
+            Logger.Log(recent.Length == 0
+                ? message + Environment.NewLine + "The player logged no warnings or errors."
+                : message + Environment.NewLine + "The player's recent warnings and errors:" + Environment.NewLine
+                    + string.Join(Environment.NewLine, recent));
+        }
+
+        private static string FormatTime(long milliseconds)
+        {
+            if (milliseconds < 0)
+                return "an unknown position";
+
+            return PositionText.Format(TimeSpan.FromMilliseconds(milliseconds));
+        }
+
+        /// <summary>
+        /// Continues the current video a little before where its stream broke off: it is looked up again (fresh
+        /// stream URLs) and started there. Returns <c>false</c> (move on instead) if nothing is known about where it
+        /// was, or if it was already resumed <see cref="MaxResumeAttempts"/> times in a row without getting going.
+        /// </summary>
+        private bool TryResume()
+        {
+            if (Current is not { } video || _lastKnownPositionMs <= 0)
+                return false;
+
+            if (_resumeAttempts >= MaxResumeAttempts)
+            {
+                Logger.Log($"\"{video.Title}\" was resumed {_resumeAttempts} times in a row without playing on; moving on to the next video.");
+                SetResuming(false);
+                return false;
+            }
+
+            _resumeAttempts++;
+            StartResume(video, _lastKnownPositionMs, reload: false);
+            return true;
+        }
+
+        /// <summary>Looks the video up again and continues it <see cref="ResumeRewind"/> before <paramref name="positionMs"/>.</summary>
+        private void StartResume(NowPlaying video, long positionMs, bool reload)
+        {
+            var startAt = Math.Max(0, positionMs - (long)ResumeRewind.TotalMilliseconds);
+            _resumedAtMs = startAt;
+
+            // The old stream stops where the label appears (a reload would otherwise play on for the seconds the lookup
+            // takes, and then jump back). A paused stream does not move, so movement means the new one plays.
+            try
+            {
+                _player.Pause();
+            }
+            catch (Exception ex)
+            {
+                Logger.Log("Exception occured trying to pause the video before resuming it.", ex);
+            }
+
+            SetResuming(true, reload);
+            Logger.Log(reload
+                ? $"Reloading \"{video.Title}\" ({video.VideoId}) with fresh stream links at {FormatTime(startAt)}."
+                : $"Resuming \"{video.Title}\" ({video.VideoId}) at {FormatTime(startAt)} (attempt {_resumeAttempts} of {MaxResumeAttempts}).");
+
+            // Late events of the old stream must not start another resume or the next video.
+            Interlocked.Increment(ref _mediaGeneration);
+            _failSafeTriggered = false;
+            _failSafePlaybackTime = long.MinValue;
+
+            RunPlaybackOperationAsync(token => ResumeInternalAsync(video, TimeSpan.FromMilliseconds(startAt), token))
+                .FireAndForget(reload ? "Reloading the video failed." : "Resuming the video failed.");
+        }
+
+        private async Task<bool> ResumeInternalAsync(NowPlaying video, TimeSpan startAt, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var resolved = await VideoLookup.ResolveAsync(_youtube, video.VideoId, _time, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                Interlocked.Increment(ref _mediaGeneration);
+                _failSafeTriggered = false;
+                _failSafePlaybackTime = long.MinValue;
+                SetState(standby: false, paused: false); // a reloaded video plays, also if it was paused
+                _player.Play(resolved.VideoUrl, resolved.AudioUrl, startAt);
+
+                // The label stays until the video really plays on there (VLC reports 0 while it seeks).
+                _resumeCheckPositionMs = -1;
+                _resumeCheckTimer.Start();
+                return false;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Logger.Log("Resuming the video was canceled.");
+                SetResuming(false);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Resuming \"{video.Title}\" ({video.VideoId}) failed; playing the next video instead.", ex);
+                SetResuming(false);
+                return await PlayNextInternalAsync(cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Ends <see cref="IsResuming"/> as soon as the resumed video plays: its position moves. Not the start point: VLC
+        /// starts at the keyframe before it, a few seconds earlier (measured: 49:57 for 50:00), and would keep the label up
+        /// for those seconds. Until the player has started the new stream, the old one may still report its position, but
+        /// it does not move: it was paused when the resume began, or it froze or ended.
+        /// </summary>
+        private void OnResumeCheckTick()
+        {
+            if (!_isResuming)
+            {
+                _resumeCheckTimer.Stop();
+                return;
+            }
+
+            var previous = _resumeCheckPositionMs;
+            var position = _player.TimeMs;
+            _resumeCheckPositionMs = position;
+            if (_player.IsPlaying && previous > 0 && position > previous)
+            {
+                Logger.Log($"\"{Current?.Title}\" plays on at {FormatTime(position)}.");
+                SetResuming(false);
+            }
+        }
+
+        private void SetResuming(bool resuming, bool reload = false)
+        {
+            if (!resuming)
+            {
+                _resumeCheckTimer.Stop();
+                reload = false;
+            }
+
+            if (_isResuming == resuming && _isReloading == reload)
+                return;
+
+            _isResuming = resuming;
+            _isReloading = reload;
+            StateChanged?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnFailSafeTick()
@@ -702,6 +944,14 @@ namespace YouTubeVideoPlayer.Playback
             var currentPlaybackTime = _player.TimeMs;
             var isPlaying = _player.IsPlaying;
 
+            // Where the video is, for a resume after its stream broke off (the player may not know it any more then).
+            if (currentPlaybackTime > 0)
+            {
+                _lastKnownPositionMs = currentPlaybackTime;
+                if (_resumeAttempts > 0 && currentPlaybackTime >= _resumedAtMs + (long)ResumeSucceededAfter.TotalMilliseconds)
+                    _resumeAttempts = 0; // the last resume worked
+            }
+
             if (!isPlaying || currentPlaybackTime == _failSafePlaybackTime)
             {
                 // Only act if the problem is still there on the next check.
@@ -712,11 +962,14 @@ namespace YouTubeVideoPlayer.Playback
                 }
 
                 if (isPlaying)
-                    Logger.Log("Media player state is playing, but video is frozen. Disconnect possible.");
+                    LogPlayerProblem($"The player says it is playing, but the video is frozen at {FormatTime(currentPlaybackTime)}. Disconnect possible.");
                 else
-                    Logger.Log("Failstate triggered player state: " + _player.State);
+                    LogPlayerProblem($"The player stopped playing (state: {_player.State}) at {FormatTime(currentPlaybackTime)}.");
 
                 StopBufferingWatch();
+                if (TryResume())
+                    return;
+
                 AdvanceAutomatically("PlayNextAsync after fail-safe trigger failed.");
             }
 
@@ -797,6 +1050,7 @@ namespace YouTubeVideoPlayer.Playback
                 _playNextCancellationTokenSource?.Cancel();
                 _bufferingTimeoutTimer.Dispose();
                 _failSafeTimer.Dispose();
+                _resumeCheckTimer.Dispose();
                 _player.Stop();
             }
             catch (Exception ex)

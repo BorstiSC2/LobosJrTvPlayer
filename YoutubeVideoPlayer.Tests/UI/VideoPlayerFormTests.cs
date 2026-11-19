@@ -94,11 +94,16 @@ public class VideoPlayerFormTests
 
         public TitleStrip TitleStrip => Form.All<TitleStrip>().Single();
 
+        /// <summary>What the vote ticker shows, as one line; <c>null</c> without a ticker.</summary>
+        public string? Ticker => TitleStrip.Ticker?.PlainText;
+
         public Label VolumeLabel => Form.All<Label>().Single(l => l.Size == new Size(100, 40));
 
-        public Label BufferingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 150);
+        public OverlayPill BufferingLabel => Form.All<OverlayPill>().Single(l => l.Name == "buffering");
 
-        public Label WaitingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 480);
+        public OverlayPill WaitingLabel => Form.All<OverlayPill>().Single(l => l.Name == "waiting");
+
+        public OverlayPill ResumeLabel => Form.All<OverlayPill>().Single(l => l.Name == "resume");
 
         public Label TwitchLabel => Form.All<Label>().Single(l => l.Dock == DockStyle.Fill);
 
@@ -325,12 +330,50 @@ public class VideoPlayerFormTests
         app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 10f);
         await Async.SettleAsync();
         Assert.True(app.BufferingLabel.Visible);
-        Assert.StartsWith("Buffering", app.BufferingLabel.Text);
-        await Async.WaitUntilAsync(() => app.BufferingLabel.Text != "Buffering...", because: "the spinner animates");
+        Assert.StartsWith("Buffering", app.BufferingLabel.ShownText);
+        await Async.WaitUntilAsync(() => app.BufferingLabel.ShownText != "Buffering ...", because: "the dots animate");
 
         app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 100f);
         await Async.SettleAsync();
         Assert.False(app.BufferingLabel.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void WhileABrokenStreamIsResumed_ALabelSaysSo_InsteadOfTheBufferingLabel() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        app.Player.IsPlaying.Returns(true);
+        app.Player.TimeMs.Returns(61_000L);
+        app.Time.Advance(PlaybackManager.FailSafeInterval); // the watchdog sees the position
+        await Async.SettleAsync();
+        Assert.False(app.ResumeLabel.Visible);
+
+        // The stream breaks off 1:01 into the 3-minute video; the resumed one buffers and seeks (position 0).
+        app.Player.TimeMs.Returns(0L);
+        app.Player.EndReached += Raise.Event();
+        await Async.WaitUntilAsync(() => app.Playback.IsResuming);
+        app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 10f);
+        await Async.SettleAsync();
+
+        Assert.True(app.ResumeLabel.Visible);
+        Assert.Equal("Connection lost - resuming at 0:58", app.ResumeLabel.Text); // the dots after it animate
+        Assert.False(app.BufferingLabel.Visible); // same place in the middle: the resume label says enough
+        await Async.WaitUntilAsync(() => app.ResumeLabel.ShownText != "Connection lost - resuming at 0:58 ...", because: "the dots animate");
+
+        // It plays on at its start point: the label goes, and the buffering that is still going on shows.
+        var position = 58_000L;
+        app.Player.TimeMs.Returns(_ => position += 500);
+        for (var check = 0; check < 2; check++)
+        {
+            app.Time.Advance(PlaybackManager.ResumeCheckInterval);
+            await Async.SettleAsync();
+        }
+
+        Assert.False(app.Playback.IsResuming);
+        Assert.False(app.ResumeLabel.Visible);
+        Assert.True(app.BufferingLabel.Visible);
     }, sta: true);
 
     [Fact]
@@ -500,23 +543,24 @@ public class VideoPlayerFormTests
         await app.ShowAsync();
         await app.PressPlayAsync();
         var title = app.Playback.Current!.Title;
-        Assert.Null(app.TitleStrip.TickerText);
+        Assert.Null(app.Ticker);
 
         await app.Votes!.StartAsync("mod");
-        await Async.WaitUntilAsync(() => app.TitleStrip.TickerText != null);
+        await Async.WaitUntilAsync(() => app.Ticker != null);
 
-        Assert.StartsWith("VOTE NOW for the next video!", app.TitleStrip.TickerText);
-        Assert.Contains("1) Option ", app.TitleStrip.TickerText);
-        Assert.Contains("(0)", app.TitleStrip.TickerText);
-        Assert.Contains("type !vote 1-3", app.TitleStrip.TickerText);
+        Assert.StartsWith("Vote  |  ", app.Ticker);
+        Assert.Contains("1 Option ", app.Ticker);
+        Assert.Contains("(0)", app.Ticker);
+        Assert.EndsWith("!vote 1–3", app.Ticker);
         Assert.Equal(title, app.TitleStrip.Title); // kept behind the ticker
 
         app.Votes.Vote(Chat.Command("!vote 2", user: "viewer"));
-        Assert.Contains("(1)", app.TitleStrip.TickerText);
+        Assert.Contains("(1)", app.Ticker);
+        Assert.True(app.TitleStrip.Ticker!.Items[1].Leading);
 
         app.Votes.Cancel(Chat.Command("!cancelvote", user: "mod"));
 
-        Assert.Null(app.TitleStrip.TickerText);
+        Assert.Null(app.Ticker);
         Assert.Equal(title, app.TitleStrip.Title);
     }, sta: true);
 
@@ -528,8 +572,8 @@ public class VideoPlayerFormTests
         await app.PressPlayAsync();
 
         await app.Votes!.StartAsync("mod");
-        await Async.WaitUntilAsync(() => app.TitleStrip.TickerText != null);
-        Assert.DoesNotContain(" left", app.TitleStrip.TickerText);
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+        Assert.Null(app.TitleStrip.Ticker!.Time);
 
         for (var i = 0; i < SkipVoteManager.OptionCount; i++)
         {
@@ -537,9 +581,9 @@ public class VideoPlayerFormTests
             app.Time.Advance(SkipVoteManager.MessageDelay);
         }
 
-        await Async.WaitUntilAsync(() => app.TitleStrip.TickerText!.EndsWith("2:00 left"));
+        await Async.WaitUntilAsync(() => app.TitleStrip.Ticker!.Time == "2:00");
         app.Time.Advance(TimeSpan.FromSeconds(30));
-        await Async.WaitUntilAsync(() => app.TitleStrip.TickerText!.EndsWith("1:30 left"), because: "the ticker is updated every second");
+        await Async.WaitUntilAsync(() => app.TitleStrip.Ticker!.Time == "1:30", because: "the ticker is updated every second");
     }, sta: true);
 
     [Fact]
@@ -551,16 +595,15 @@ public class VideoPlayerFormTests
 
         Assert.Null(app.VoteSkip!.Start(Chat.Command("!voteskip")));
 
-        Assert.StartsWith("VOTE NOW: skip ", app.TitleStrip.TickerText);
-        Assert.Contains("Skip (1)  ·  Stay (0)", app.TitleStrip.TickerText);
-        Assert.Contains("type !skip / !stay", app.TitleStrip.TickerText);
-        Assert.Contains("needs 1 !skip vote", app.TitleStrip.TickerText);
+        Assert.StartsWith("Skip this video? 1:00  |  \"Title a", app.Ticker);
+        Assert.Contains("!skip (1 of 1)  ·  !stay (0)", app.Ticker);
+        Assert.EndsWith("Type !skip or !stay", app.Ticker);
 
         app.VoteSkip.Vote(Chat.Command("!stay", user: "other"), skip: false);
-        Assert.Contains("Skip (1)  ·  Stay (1)", app.TitleStrip.TickerText);
+        Assert.Contains("!skip (1 of 1)  ·  !stay (1)", app.Ticker);
 
         app.VoteSkip.Cancel(Chat.Command("!cancelvote", user: "mod"));
-        Assert.Null(app.TitleStrip.TickerText);
+        Assert.Null(app.Ticker);
     }, sta: true);
 
     [Fact]
@@ -572,15 +615,15 @@ public class VideoPlayerFormTests
         var first = app.Playback.Current!;
 
         app.Votes!.StartAfterCurrentAsync(TimeSpan.FromMinutes(2)).FireAndForget("test vote");
-        await Async.WaitUntilAsync(() => app.TitleStrip.TickerText != null);
-        Assert.StartsWith("VOTE NOW for the video after this one!", app.TitleStrip.TickerText);
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+        Assert.EndsWith("!vote 1–3 for the video after this one", app.Ticker);
 
         app.Playback.SkipAsync().FireAndForget("test skip");
         await Async.SettleAsync();
         app.Time.Advance(PlaybackManager.DelayBeforeNextVideo); // in case the next video was not prepared
         await Async.WaitUntilAsync(() => !ReferenceEquals(app.Playback.Current, first) && app.Playback.Current != null);
 
-        Assert.NotNull(app.TitleStrip.TickerText);
+        Assert.NotNull(app.Ticker);
         Assert.Equal(app.Playback.Current!.Title, app.TitleStrip.Title);
     }, sta: true);
 

@@ -51,11 +51,9 @@ public class TitleStripTests
         public void Dispose() => _form.Dispose();
     }
 
-    private static int TextWidth(string text)
-    {
-        using var font = new Font(FontFamily.GenericSansSerif, 10, FontStyle.Bold);
-        return TextRenderer.MeasureText(text, font).Width;
-    }
+    /// <summary>A ticker with one item.</summary>
+    private static TickerContent Ticker(string text) =>
+        new(OverlayStyle.VoteGlyph, "Vote", null, null, new[] { new TickerItem("1", text, 0, "0", false) }, null);
 
     private static void AssertAnchored(TitleStrip strip)
     {
@@ -76,7 +74,7 @@ public class TitleStripTests
         host.Finish();
 
         Assert.Equal(Content.Title, host.Strip.Shown);
-        Assert.Equal(TextWidth("Some video"), host.Strip.Width);
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
         Assert.Equal(1, host.Strip.ContentAlpha);
         Assert.False(host.Strip.IsAnimating);
         Assert.False(host.Strip.IsClockRunning);
@@ -101,7 +99,7 @@ public class TitleStripTests
 
         host.Strip.Title = "A considerably longer video title";
 
-        Assert.Equal(TextWidth("A considerably longer video title"), host.Strip.Width);
+        Assert.Equal(host.Strip.TitleWidth("A considerably longer video title"), host.Strip.Width);
         Assert.Equal(1, host.Strip.ContentAlpha);
         Assert.False(host.Strip.IsAnimating);
         AssertAnchored(host.Strip);
@@ -114,25 +112,25 @@ public class TitleStripTests
         host.ShowTitle("Some video");
         var titleHeight = host.Strip.Height;
 
-        host.Strip.TickerText = "VOTE NOW! 1) A (0) · 2) B (0)";
+        host.Strip.Ticker = Ticker("VOTE NOW! 1) A (0) · 2) B (0)");
         Assert.True(host.Strip.IsClockRunning);
 
         host.Run(TimeSpan.FromMilliseconds(70));
         Assert.Equal(Content.Title, host.Strip.Shown);
         Assert.InRange(host.Strip.ContentAlpha, 0.4, 0.6); // fading out
-        Assert.Equal(TextWidth("Some video"), host.Strip.Width);
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
 
         host.Run(TimeSpan.FromMilliseconds(100));
         Assert.Equal(Content.Ticker, host.Strip.Shown); // swapped while invisible
         Assert.Equal(0, host.Strip.ContentAlpha);
 
         host.Run(TimeSpan.FromMilliseconds(100));
-        Assert.InRange(host.Strip.Width, TextWidth("Some video") + 1, Available - 1); // widening
+        Assert.InRange(host.Strip.Width, host.Strip.TitleWidth("Some video") + 1, Available - 1); // widening
         Assert.Equal(0, host.Strip.ContentAlpha);
 
         host.Run(TimeSpan.FromMilliseconds(130));
         Assert.Equal(Available, host.Strip.Width);
-        Assert.True(host.Strip.Height > titleHeight);
+        Assert.Equal(titleHeight, host.Strip.Height); // one style, one height
         AssertAnchored(host.Strip);
 
         host.Run(TimeSpan.FromMilliseconds(200));
@@ -150,7 +148,7 @@ public class TitleStripTests
     public void EveryRefresh_MovesTheTickerByTheSameWholeNumberOfPixels() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Finish();
         var step = host.Strip.PixelsPerFrame;
         Assert.True(step >= 1);
@@ -171,7 +169,7 @@ public class TitleStripTests
     public void ARefreshTheUiThreadMissed_IsMadeUpInTheNextFrame() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Finish();
         var offset = host.Strip.ScrollOffset;
 
@@ -197,11 +195,11 @@ public class TitleStripTests
     public void NewTickerText_KeepsScrollingFromWhereItIs() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.TickerText = "VOTE NOW! 1) A (0)";
+        host.Strip.Ticker = Ticker("VOTE NOW! 1) A (0)");
         host.Finish();
         var offset = host.Strip.ScrollOffset;
 
-        host.Strip.TickerText = "VOTE NOW! 1) A (1)";
+        host.Strip.Ticker = Ticker("VOTE NOW! 1) A (1)");
 
         Assert.Equal(offset, host.Strip.ScrollOffset);
         Assert.Equal(Content.Ticker, host.Strip.Shown);
@@ -213,7 +211,7 @@ public class TitleStripTests
     public void TheTicker_StartsOverAfterEachLoop() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Finish();
 
         host.Run(TimeSpan.FromSeconds(60)); // far more than one loop
@@ -226,10 +224,10 @@ public class TitleStripTests
     {
         using var host = new Host();
         host.ShowTitle("Some video");
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Finish();
 
-        host.Strip.TickerText = null;
+        host.Strip.Ticker = null;
         host.Run(TimeSpan.FromMilliseconds(170));
         Assert.Equal(Content.Title, host.Strip.Shown);
         Assert.Equal(0, host.Strip.ContentAlpha);
@@ -237,7 +235,7 @@ public class TitleStripTests
 
         host.Finish();
 
-        Assert.Equal(TextWidth("Some video"), host.Strip.Width);
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
         Assert.Equal(1, host.Strip.ContentAlpha);
         Assert.False(host.Strip.IsClockRunning);
         AssertAnchored(host.Strip);
@@ -248,17 +246,17 @@ public class TitleStripTests
     {
         using var host = new Host();
         host.ShowTitle("Some video");
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Run(TimeSpan.FromMilliseconds(70));
         var alpha = host.Strip.ContentAlpha;
         Assert.InRange(alpha, 0.4, 0.6);
 
-        host.Strip.TickerText = null; // the vote was cancelled at once
+        host.Strip.Ticker = null; // the vote was cancelled at once
         host.Run(TimeSpan.FromMilliseconds(10));
 
         Assert.Equal(Content.Title, host.Strip.Shown);
         Assert.InRange(host.Strip.ContentAlpha, alpha, alpha + 0.1); // fading back in, no jump
-        Assert.Equal(TextWidth("Some video"), host.Strip.Width);
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
     }, sta: true);
 
     [Fact]
@@ -283,10 +281,10 @@ public class TitleStripTests
     public void AfterAVoteWithoutTitle_TheTickerShrinksToNothing() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.TickerText = "VOTE NOW!";
+        host.Strip.Ticker = Ticker("VOTE NOW!");
         host.Finish();
 
-        host.Strip.TickerText = null;
+        host.Strip.Ticker = null;
         host.Finish();
 
         Assert.Equal(0, host.Strip.Width);

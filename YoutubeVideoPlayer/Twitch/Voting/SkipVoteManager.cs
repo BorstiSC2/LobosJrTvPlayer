@@ -83,11 +83,10 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                     counts[choice]++;
 
                 var options = session.Options
-                    .Select((o, i) => new VoteDisplayOption($"{i + 1}) {Shorten(o.Title)}", $"!vote {i + 1}", counts[i]))
+                    .Select((o, i) => new VoteDisplayOption($"{i + 1}", Shorten(o.Title), $"!vote {i + 1}", counts[i]))
                     .ToList();
-                var headline = session.AfterCurrent ? "VOTE NOW for the video after this one!" : "VOTE NOW for the next video!";
                 TimeSpan? left = session.EndsAt is { } endsAt ? Max(TimeSpan.Zero, endsAt - _time.GetUtcNow()) : null;
-                return new VoteDisplay(headline, options, null, left);
+                return new VoteDisplay(session.AfterCurrent ? VoteKind.VideoAfterCurrent : VoteKind.NextVideo, options, left);
             }
         }
 

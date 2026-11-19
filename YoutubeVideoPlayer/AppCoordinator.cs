@@ -71,6 +71,7 @@ namespace YouTubeVideoPlayer
             {
                 // A video queued by a chat vote comes from the previous selection.
                 _playback.ClearQueuedVideo();
+                Logger.Log("The playlist selection changed; skipping to a video of the new selection.");
                 _playback.SkipAsync().FireAndForget("Switching to the selected playlist failed.");
             }
             // Otherwise the pool only grew or was updated, or an automatic swap lets the current video play to its end
@@ -106,6 +107,7 @@ namespace YouTubeVideoPlayer
                 }
                 else
                 {
+                    Logger.Log("Videos are available again; starting playback.");
                     _playback.PlayNextAsync().FireAndForget("Starting playback failed.");
                 }
             }

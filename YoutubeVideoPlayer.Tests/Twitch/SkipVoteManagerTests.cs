@@ -815,11 +815,11 @@ public class SkipVoteManagerTests
 
         var display = setup.Manager.Display!;
         Assert.Equal(1, changes);
-        Assert.Equal("VOTE NOW for the next video!", display.Headline);
+        Assert.Equal(VoteKind.NextVideo, display.Kind);
         Assert.Equal(
-            new[] { ("1) Same title", "!vote 1", 0), ("2) Same title", "!vote 2", 0), ("3) Same title", "!vote 3", 0) },
-            display.Options.Select(o => (o.Label, o.Command, o.Votes)));
-        Assert.Null(display.Note);
+            new (string?, string, string, int)[] { ("1", "Same title", "!vote 1", 0), ("2", "Same title", "!vote 2", 0), ("3", "Same title", "!vote 3", 0) },
+            display.Options.Select(o => (o.Number, o.Title, o.Command, o.Votes)));
+        Assert.Null(display.Subject);
         Assert.Null(display.TimeLeft);
     });
 
@@ -895,7 +895,7 @@ public class SkipVoteManagerTests
 
         await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromSeconds(45));
 
-        Assert.Equal("VOTE NOW for the video after this one!", setup.Manager.Display!.Headline);
+        Assert.Equal(VoteKind.VideoAfterCurrent, setup.Manager.Display!.Kind);
     });
 
     #endregion

@@ -101,6 +101,8 @@ public class PlaylistSwapEndToEndTests
         await StepAsync(TimeSpan.FromSeconds(5)); // the winner is prepared in advance
         Assert.Equal(new[] { first }, Played());
 
+        // The video plays to its end (an end reported well before the length would be a broken stream).
+        await StepAsync(VideoLength - (time.GetUtcNow() - videoStart));
         player.EndReached += Raise.Event();
         await StepUntilAsync(() => Played().Count == 2, TimeSpan.FromSeconds(1), 5, "the winner should play");
 

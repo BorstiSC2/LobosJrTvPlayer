@@ -1116,18 +1116,19 @@ public class PlaybackManagerTests
     });
 
     [Fact]
-    public void FailSafe_SkipsAFrozenVideo() => UiContext.Run(async () =>
+    public void FailSafe_SkipsAFrozenVideo_WhenResumingItDidNotHelp() => UiContext.Run(async () =>
     {
         using var setup = new PlaybackSetup().Queue("v1", "v2");
         await setup.RunAsync(setup.Manager.PlayNextAsync);
         setup.Player.IsPlaying.Returns(true);
-        setup.Player.TimeMs.Returns(5000L); // position does not move
+        setup.Player.TimeMs.Returns(5000L); // position does not move, also after each resume
 
-        for (var check = 0; check < 3; check++)
+        for (var check = 0; check < 10; check++)
             await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
         await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
 
-        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+        // Two resumes, then the next video.
+        Assert.Equal(new[] { "v1.video", "v1.video", "v1.video", "v2.video" }, setup.PlayedVideos());
     });
 
     [Fact]

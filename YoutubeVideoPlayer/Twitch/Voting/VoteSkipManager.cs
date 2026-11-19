@@ -82,10 +82,11 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 var (skip, stay) = session.Count();
                 var left = session.EndsAt - _time.GetUtcNow();
                 return new VoteDisplay(
-                    $"VOTE NOW: skip \"{SkipVoteManager.Shorten(session.Video.Title)}\"?",
-                    new[] { new VoteDisplayOption("Skip", "!skip", skip), new VoteDisplayOption("Stay", "!stay", stay) },
-                    $"needs {Votes(session.Required)}",
-                    left > TimeSpan.Zero ? left : TimeSpan.Zero);
+                    VoteKind.Skip,
+                    new[] { new VoteDisplayOption(null, "!skip", "!skip", skip), new VoteDisplayOption(null, "!stay", "!stay", stay) },
+                    left > TimeSpan.Zero ? left : TimeSpan.Zero,
+                    SkipVoteManager.Shorten(session.Video.Title),
+                    session.Required);
             }
         }
 

@@ -459,9 +459,12 @@ public class VoteSkipManagerTests
 
         var display = setup.VoteSkip.Display!;
         Assert.Equal(2, changes); // the start and the first !stay
-        Assert.Equal("VOTE NOW: skip \"Boring video\"?", display.Headline);
-        Assert.Equal(new[] { ("Skip", "!skip", 1), ("Stay", "!stay", 1) }, display.Options.Select(o => (o.Label, o.Command, o.Votes)));
-        Assert.Equal("needs 3 !skip votes", display.Note);
+        Assert.Equal(VoteKind.Skip, display.Kind);
+        Assert.Equal("Boring video", display.Subject);
+        Assert.Equal(
+            new[] { ((string?)null, "!skip", "!skip", 1), (null, "!stay", "!stay", 1) },
+            display.Options.Select(o => (o.Number, o.Title, o.Command, o.Votes)));
+        Assert.Equal(3, display.Required);
         Assert.Equal(TimeSpan.FromSeconds(45), display.TimeLeft);
     });
 

@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Linq;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -41,24 +42,23 @@ namespace YouTubeVideoPlayer.UI
         /// <summary>The ticker's speed at 96 DPI; scaled with the display, and rounded to whole pixels per refresh.</summary>
         private const double BasePixelsPerSecond = 120;
 
-        private const int TitleHeight = 25;
-        private const int TickerPadding = 8;
-
-        /// <summary>The box colour of the overlay labels (black at 200/255 over the form).</summary>
-        private static readonly Color BoxColor = Color.FromArgb(200, 0, 0, 0);
-
         private readonly TimeProvider _time;
         private readonly FrameClock _clock;
-        private readonly Font _titleFont = new(FontFamily.GenericSansSerif, 10, FontStyle.Bold);
-        private readonly Font _tickerFont = new(FontFamily.GenericSansSerif, 14, FontStyle.Bold);
 
+        private OverlayStyle? _style;
         private string _title = string.Empty;
-        private string? _tickerText;
+        private TickerContent? _ticker;
         private int _availableWidth = 100;
         private Point _bottomLeft;
 
         private Content _shown = Content.None;
-        private Bitmap? _bitmap;
+
+        // The standing part (badge, and the time in ticker mode) and the body (the title, or the items that scroll),
+        // each rendered once; the keys say what they show, so an unchanged part is not rendered again.
+        private Bitmap? _standing;
+        private Bitmap? _body;
+        private string? _standingKey;
+        private string? _bodyKey;
         private double _alpha;
         private int _scrollOffset;
         private double _frameDebt;
@@ -77,7 +77,7 @@ namespace YouTubeVideoPlayer.UI
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
             SetStyle(ControlStyles.Selectable, false);
             Visible = false;
-            Size = new Size(0, TitleHeight);
+            Size = new Size(0, Style.Height);
 
             _clock = new FrameClock(refreshes =>
             {
@@ -101,7 +101,7 @@ namespace YouTubeVideoPlayer.UI
                 if (_shown == Content.Title && Desired == Content.Title)
                 {
                     // A new title is not a transition: it replaces the old one at once.
-                    Render();
+                    Render(force: true);
                     if (!_resizing)
                         ApplySize(TargetSize(Content.Title));
                     Invalidate();
@@ -111,20 +111,20 @@ namespace YouTubeVideoPlayer.UI
             }
         }
 
-        /// <summary>The text the ticker scrolls through; <c>null</c> shows the title.</summary>
+        /// <summary>What the vote ticker shows; <c>null</c> shows the title.</summary>
         [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-        public string? TickerText
+        public TickerContent? Ticker
         {
-            get => _tickerText;
+            get => _ticker;
             set
             {
-                if (value == _tickerText)
+                if (value == _ticker)
                     return;
 
-                _tickerText = value;
+                _ticker = value;
                 if (_shown == Content.Ticker && Desired == Content.Ticker)
                 {
-                    // New counts or time: the text keeps scrolling from where it is.
+                    // New counts or time: the items keep scrolling from where they are.
                     Render();
                     Invalidate();
                 }
@@ -146,7 +146,7 @@ namespace YouTubeVideoPlayer.UI
 
                 _availableWidth = value;
                 if (_shown == Content.Title)
-                    Render(); // the end ellipsis depends on the width
+                    Render(force: true); // the end ellipsis depends on the width
 
                 if (!IsAnimating)
                     ApplySize(TargetSize(_shown));
@@ -191,14 +191,24 @@ namespace YouTubeVideoPlayer.UI
         internal bool IsClockRunning => _clock.IsRunning;
 
         private Content Desired =>
-            _tickerText != null ? Content.Ticker
+            _ticker != null ? Content.Ticker
             : _title.Length > 0 ? Content.Title
             : Content.None;
 
-        private int TickerHeight => _tickerFont.Height + TickerPadding;
+        /// <summary>The look, for this display's DPI and the form behind the strip.</summary>
+        private OverlayStyle Style => _style ??= new OverlayStyle(DeviceDpi, Parent?.BackColor ?? SystemColors.Control);
 
-        /// <summary>The ticker text and the gap before it starts again.</summary>
-        private int LoopLength => (_bitmap?.Width ?? 0) + Math.Max(50, Width / 3);
+        /// <summary>Where the items scroll: right of the standing part.</summary>
+        private int ScrollLeft => _shown == Content.Ticker ? _standing?.Width ?? 0 : 0;
+
+        private int ScrollWidth => Math.Max(0, Width - ScrollLeft);
+
+        /// <summary>The items and the gap before they start again.</summary>
+        private int LoopLength => (_body?.Width ?? 0) + Math.Max(Style.Scale(50), ScrollWidth / 3);
+
+        /// <summary>The width the title needs: the badge with the play icon and the text.</summary>
+        internal int TitleWidth(string title) =>
+            Style.BadgeWidth(OverlayStyle.PlayGlyph, null) + Style.Padding + OverlayStyle.Measure(title, Style.Strong) + Style.Padding;
 
         /// <summary>
         /// Moves the animation and the ticker to the current time. The frame clock passes the number of refreshes since
@@ -294,104 +304,192 @@ namespace YouTubeVideoPlayer.UI
         {
             _scrollOffset += refreshes * PixelsPerFrame;
 
-            // Once the text has run through completely, it starts over one loop further on.
+            // Once the items have run through completely, they start over one loop further on.
             var loop = LoopLength;
-            while (loop > 0 && Width - _scrollOffset <= -loop)
+            while (loop > 0 && ScrollWidth - _scrollOffset <= -loop)
                 _scrollOffset -= loop;
         }
 
         private Size TargetSize(Content content) => content switch
         {
-            Content.Ticker => new Size(_availableWidth, TickerHeight),
-            Content.Title => new Size(Math.Min(_availableWidth, TextRenderer.MeasureText(_title, _titleFont).Width), TitleHeight),
+            Content.Ticker => new Size(_availableWidth, Style.Height),
+            Content.Title => new Size(Math.Min(_availableWidth, TitleWidth(_title)), Style.Height),
             _ => new Size(0, Height)
         };
 
         private void ApplySize(Size size) =>
             SetBounds(_bottomLeft.X, Math.Max(0, _bottomLeft.Y - size.Height), size.Width, size.Height);
 
-        /// <summary>Renders the shown text once, on the box colour, so a frame only has to copy it.</summary>
-        private void Render()
+        /// <summary>
+        /// Renders what is shown once, on the box colour, so a frame only has to copy it: the parts whose content did not
+        /// change are kept (unless <paramref name="force"/>).
+        /// </summary>
+        private void Render(bool force = false)
         {
-            _bitmap?.Dispose();
-            _bitmap = null;
+            var style = Style;
+            string? standingKey = null, bodyKey = null;
+            Func<Bitmap?>? standing = null, body = null;
 
-            var (text, font, width, height, flags) = _shown switch
+            if (_shown == Content.Title)
             {
-                Content.Title => (_title, _titleFont, Math.Min(_availableWidth, TextRenderer.MeasureText(_title, _titleFont).Width),
-                    TitleHeight, TextFormatFlags.EndEllipsis),
-                Content.Ticker => (_tickerText ?? string.Empty, _tickerFont, TextRenderer.MeasureText(_tickerText ?? string.Empty, _tickerFont).Width,
-                    TickerHeight, TextFormatFlags.Default),
-                _ => (string.Empty, _titleFont, 0, 0, TextFormatFlags.Default)
-            };
+                var badge = style.BadgeWidth(OverlayStyle.PlayGlyph, null);
+                var textWidth = Math.Max(0, Math.Min(_availableWidth, TitleWidth(_title)) - badge);
+                standingKey = "title";
+                standing = () => RenderBitmap(badge, g => style.DrawBadge(g, 0, OverlayStyle.PlayGlyph, null));
+                bodyKey = $"{_title}|{textWidth}";
+                body = () => RenderBitmap(textWidth, g =>
+                    style.DrawText(g, _title, style.Strong, style.Padding, Color.White, style.Box, textWidth - 2 * style.Padding, ellipsis: true));
+            }
+            else if (_shown == Content.Ticker && _ticker is { } ticker)
+            {
+                standingKey = ticker.Icon + ticker.StandingText;
+                standing = () =>
+                {
+                    var width = style.BadgeWidth(ticker.Icon, ticker.Label) + (ticker.Time == null ? 0 : style.TimeWidth(ticker.Time));
+                    return RenderBitmap(width, g =>
+                    {
+                        var x = style.DrawBadge(g, 0, ticker.Icon, ticker.Label);
+                        if (ticker.Time != null)
+                            style.DrawTime(g, x, ticker.Time);
+                    });
+                };
+                bodyKey = string.Join("|", ticker.Items.Select(i => i.ToString())) + "|" + ticker.Lead + "|" + ticker.Hint;
+                body = () => RenderBitmap(BodyWidth(style, ticker), g => DrawBody(g, style, ticker));
+            }
 
-            if (width <= 0 || height <= 0)
-                return;
+            if (force || standingKey != _standingKey)
+            {
+                _standing?.Dispose();
+                _standing = standing?.Invoke();
+                _standingKey = standingKey;
+            }
+
+            if (force || bodyKey != _bodyKey)
+            {
+                _body?.Dispose();
+                _body = body?.Invoke();
+                _bodyKey = bodyKey;
+            }
+        }
+
+        private static int BodyWidth(OverlayStyle style, TickerContent ticker)
+        {
+            var space = style.Scale(14);
+            var width = ticker.Items.Sum(style.ItemWidth);
+            if (ticker.Lead != null)
+                width += space + OverlayStyle.Measure(ticker.Lead, style.Text) + space;
+            if (ticker.Hint != null)
+                width += space + OverlayStyle.Measure(ticker.Hint, style.Text) + space;
+            return width;
+        }
+
+        private static void DrawBody(Graphics g, OverlayStyle style, TickerContent ticker)
+        {
+            var space = style.Scale(14);
+            var x = 0;
+            if (ticker.Lead != null)
+            {
+                style.DrawText(g, ticker.Lead, style.Text, x + space, style.Muted, style.Box);
+                x += space + OverlayStyle.Measure(ticker.Lead, style.Text) + space;
+            }
+
+            foreach (var item in ticker.Items)
+                x += style.DrawItem(g, x, item);
+
+            if (ticker.Hint != null)
+                style.DrawText(g, ticker.Hint, style.Text, x + space, style.Muted, style.Box);
+        }
+
+        private Bitmap? RenderBitmap(int width, Action<Graphics> draw)
+        {
+            var height = Style.Height;
+            if (width <= 0)
+                return null;
 
             // No alpha channel: GDI text written into an ARGB bitmap would come out transparent.
             using var rgb = new Bitmap(width, height, PixelFormat.Format32bppRgb);
             using (var g = Graphics.FromImage(rgb))
             {
-                g.Clear(OpaqueBoxColor);
-                TextRenderer.DrawText(
-                    g, text, font, new Rectangle(0, 0, width, height), Color.White, OpaqueBoxColor,
-                    flags | TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                g.Clear(Style.Box);
+                draw(g);
             }
 
             // Premultiplied ARGB (opaque) is the format GDI+ copies fastest; anything else is converted on every frame.
-            _bitmap = rgb.Clone(new Rectangle(0, 0, width, height), PixelFormat.Format32bppPArgb);
+            return rgb.Clone(new Rectangle(0, 0, width, height), PixelFormat.Format32bppPArgb);
         }
 
-        /// <summary>The box colour blended over the form, as the overlay labels look.</summary>
-        private Color OpaqueBoxColor
+        /// <summary>A new look (another form colour or DPI): everything is rendered again.</summary>
+        private void ResetStyle()
         {
-            get
-            {
-                var under = Parent?.BackColor ?? SystemColors.Control;
-                var a = BoxColor.A / 255.0;
-                return Color.FromArgb(
-                    (int)Math.Round(BoxColor.R * a + under.R * (1 - a)),
-                    (int)Math.Round(BoxColor.G * a + under.G * (1 - a)),
-                    (int)Math.Round(BoxColor.B * a + under.B * (1 - a)));
-            }
+            _style?.Dispose();
+            _style = null;
+            Render(force: true);
+            if (!IsAnimating)
+                ApplySize(TargetSize(_shown));
+            Invalidate();
         }
 
         protected override void OnParentChanged(EventArgs e)
         {
             base.OnParentChanged(e);
-            Render(); // the box colour depends on the form
+            ResetStyle(); // the box colour depends on the form
+        }
+
+        protected override void OnParentBackColorChanged(EventArgs e)
+        {
+            base.OnParentBackColorChanged(e);
+            ResetStyle();
+        }
+
+        protected override void OnDpiChangedAfterParent(EventArgs e)
+        {
+            base.OnDpiChangedAfterParent(e);
+            ResetStyle();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
-            using (var box = new SolidBrush(OpaqueBoxColor))
+            using (var box = new SolidBrush(Style.Box))
                 g.FillRectangle(box, ClientRectangle);
 
-            if (_bitmap == null || _alpha <= 0)
+            if (_alpha <= 0)
                 return;
 
             if (_shown == Content.Ticker)
             {
-                var loop = LoopLength;
-                for (var x = Width - _scrollOffset; x < Width && loop > 0; x += loop)
+                // The items scroll from the right edge to the standing part, where they disappear.
+                if (_body is { } body)
                 {
-                    if (x + _bitmap.Width > 0)
-                        Draw(g, x);
+                    var loop = LoopLength;
+                    var clip = g.Clip;
+                    g.SetClip(new Rectangle(ScrollLeft, 0, ScrollWidth, Height));
+                    for (var x = ScrollLeft + ScrollWidth - _scrollOffset; x < Width && loop > 0; x += loop)
+                    {
+                        if (x + body.Width > ScrollLeft)
+                            Draw(g, body, x);
+                    }
+
+                    g.Clip = clip;
                 }
+
+                if (_standing is { } standing)
+                    Draw(g, standing, 0);
             }
             else
             {
-                Draw(g, 0);
+                if (_standing is { } standing)
+                    Draw(g, standing, 0);
+                if (_body is { } body)
+                    Draw(g, body, _standing?.Width ?? 0);
             }
 
             base.OnPaint(e);
         }
 
-        private void Draw(Graphics g, int x)
+        private void Draw(Graphics g, Bitmap bitmap, int x)
         {
             // Pixel rectangles on both sides: the bitmap's own DPI must not scale it.
-            var bitmap = _bitmap!;
             var target = new Rectangle(x, (Height - bitmap.Height) / 2, bitmap.Width, bitmap.Height);
             if (_alpha >= 1)
             {
@@ -413,10 +511,12 @@ namespace YouTubeVideoPlayer.UI
             if (disposing)
             {
                 _clock.Dispose();
-                _bitmap?.Dispose();
-                _bitmap = null;
-                _titleFont.Dispose();
-                _tickerFont.Dispose();
+                _standing?.Dispose();
+                _standing = null;
+                _body?.Dispose();
+                _body = null;
+                _style?.Dispose();
+                _style = null;
             }
 
             base.Dispose(disposing);

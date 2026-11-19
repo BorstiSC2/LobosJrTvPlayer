@@ -65,6 +65,28 @@ namespace YouTubeVideoPlayer.Playback
 
         /// <summary>Plays the next video (also starts the prepared first video while standing by).</summary>
         Task PlayNextAsync();
+
+        /// <summary>
+        /// Gets fresh stream links for the current video and continues it a few seconds before where it is (<c>!reload</c>):
+        /// a safety measure when picture or sound misbehave. It replies at once; the reload runs in the background.
+        /// </summary>
+        ReloadResult Reload();
+
+        /// <summary>Where a video that is being resumed or reloaded continues; <c>null</c> while none is.</summary>
+        TimeSpan? ResumePosition { get; }
+    }
+
+    /// <summary>What <see cref="IPlaybackControl.Reload"/> did.</summary>
+    public enum ReloadResult
+    {
+        /// <summary>The reload runs.</summary>
+        Started,
+
+        /// <summary>No video plays (none yet, standing by, or the next one waits for a vote).</summary>
+        NothingPlaying,
+
+        /// <summary>A video is being loaded right now (a skip, a resume, or another reload).</summary>
+        Busy
     }
 
     /// <summary>A hold on the change to the next video, see <see cref="IPlaybackControl.HoldNextVideo"/>.</summary>
