@@ -21,6 +21,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "current";
 
+        public string Description =>
+            "Shows the video that is playing right now: its title, how far into it we are, how much is left, and a link to it on YouTube.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }

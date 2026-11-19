@@ -231,7 +231,7 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
 - `currentCooldownSeconds` (default 5): the cooldown of `!current`, `!playlist` and `!voteskip`.
 - `skipCooldownSeconds` (default 3): the cooldown of `!forceskip`, `!reload`, `!play`, `!pause` and `!skipplaylist`.
 - `shuffleCooldownSeconds` (default 3): the cooldown of `!shufflestatus`, `!toggleshuffle`, `!playlistshufflestatus` and `!toggleplaylistshuffle`.
-- `otherCommandsCooldownSeconds` (default 5): the cooldown of each command without a setting of its own (`!autovotestatus`, `!toggleautovote`, `!token`, `!vodcommands`, `!modvodcommands`). It replaces `timestampCooldownSeconds`, which is no longer read: rename it in an existing `twitchsettings.json`, otherwise the default applies.
+- `otherCommandsCooldownSeconds` (default 5): the cooldown of each command without a setting of its own (`!autovotestatus`, `!toggleautovote`, `!token`, `!vodcommands`, `!modvodcommands`, `!commandhelp`). It replaces `timestampCooldownSeconds`, which is no longer read: rename it in an existing `twitchsettings.json`, otherwise the default applies.
 - `skipVoteDurationSeconds`: 15 to 1800; counted from the moment the last option has been posted.
 - `autoVoteLeadTimeSeconds`: 60 to 3600 (default 300); how long before the end of a video the Autovote starts its vote. The automatic playlist swap happens 30 seconds earlier.
 - `voteSkipDurationSeconds`: 15 to 600 (default 60); how long a `!voteskip` vote runs.

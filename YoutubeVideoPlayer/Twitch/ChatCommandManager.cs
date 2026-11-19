@@ -17,6 +17,12 @@ namespace YouTubeVideoPlayer.Twitch
         /// </summary>
         bool RequiresModerator { get; }
 
+        /// <summary>
+        /// What the command does, in a sentence or two for viewers (no technical terms), posted by <c>!commandhelp</c>
+        /// (except for <see cref="IsHidden"/> commands). Not a default member, so a new command cannot be registered without one.
+        /// </summary>
+        string Description { get; }
+
         /// <summary>Minimum time between two executions (shared by all users).</summary>
         TimeSpan Cooldown { get; }
 

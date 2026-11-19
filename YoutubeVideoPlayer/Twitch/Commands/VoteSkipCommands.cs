@@ -20,6 +20,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "voteskip";
 
+        public string Description =>
+            "Asks chat whether to skip the current video. Everyone answers with !skip or !stay. If enough people want to skip, chat then votes on which video plays next. If not, it can't be used again for a while.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -35,6 +38,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public SkipBallotCommand(VoteSkipManager voteSkip) => _voteSkip = voteSkip;
 
         public string Name => "skip";
+
+        public string Description =>
+            "Your vote to skip the video while a !voteskip vote is running.";
 
         public bool RequiresModerator => false;
 
@@ -57,6 +63,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public StayBallotCommand(VoteSkipManager voteSkip) => _voteSkip = voteSkip;
 
         public string Name => "stay";
+
+        public string Description =>
+            "Your vote to keep watching the video while a !voteskip vote is running.";
 
         public bool RequiresModerator => false;
 
@@ -90,6 +99,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "voteinfo";
+
+        public string Description =>
+            "Shows the vote that is running right now: the choices, how it is going and how much time is left.";
 
         public bool RequiresModerator => false;
 

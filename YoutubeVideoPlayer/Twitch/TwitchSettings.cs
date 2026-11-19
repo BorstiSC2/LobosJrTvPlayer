@@ -36,8 +36,8 @@ namespace YouTubeVideoPlayer.Twitch
 
         /// <summary>
         /// Minimum time between two replies of each command that has no cooldown setting of its own
-        /// (<c>!autovotestatus</c>, <c>!toggleautovote</c>, <c>!token</c>, <c>!vodcommands</c>, <c>!modvodcommands</c>),
-        /// to stay below Twitch's rate limits. Formerly <c>timestampCooldownSeconds</c>.
+        /// (<c>!autovotestatus</c>, <c>!toggleautovote</c>, <c>!token</c>, <c>!vodcommands</c>, <c>!modvodcommands</c>,
+        /// <c>!commandhelp</c>), to stay below Twitch's rate limits. Formerly <c>timestampCooldownSeconds</c>.
         /// </summary>
         public int OtherCommandsCooldownSeconds { get; set; } = 5;
 

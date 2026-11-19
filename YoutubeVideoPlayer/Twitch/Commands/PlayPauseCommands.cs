@@ -21,6 +21,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "play";
 
+        public string Description =>
+            "Starts the first video when the stream begins, or continues a paused video.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown { get; }
@@ -68,6 +71,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "pause";
+
+        public string Description =>
+            "Pauses the current video. Use !play to continue it.";
 
         public bool RequiresModerator => true;
 
