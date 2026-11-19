@@ -21,6 +21,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "shufflestatus";
 
+        public string Description =>
+            "Tells you whether the current playlist plays in random order or in its normal order.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -44,6 +47,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "toggleshuffle";
+
+        public string Description =>
+            "Switches the current playlist between random order and its normal order.";
 
         public bool RequiresModerator => true;
 

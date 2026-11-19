@@ -20,6 +20,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "reload";
 
+        public string Description =>
+            "Restarts the current video from about where it was. Handy when the picture or the sound gets stuck or acts up.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown { get; }

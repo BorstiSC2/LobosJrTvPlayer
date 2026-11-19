@@ -113,9 +113,10 @@ namespace YouTubeVideoPlayer
                         new AutoVoteStatusCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new ToggleAutoVoteCommand(autoVote, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new TokenCommand(twitchTokens, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
-                        // The two lists read the registered commands when they run, so new commands appear without changes here.
+                        // The two lists and the help read the registered commands when they run, so new commands appear without changes here.
                         new VodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new ModVodCommandsCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
+                        new CommandHelpCommand(() => commands!.Commands, TimeSpan.FromSeconds(twitchSettings.TimestampCooldownSeconds)),
                         new VoteSkipCommand(voteSkip, TimeSpan.FromSeconds(twitchSettings.CurrentCooldownSeconds)),
                         new VoteInfoCommand(votes, voteSkip, TimeSpan.FromSeconds(twitchSettings.VoteInfoCooldownSeconds)),
                         new ForceVoteSkipCommand(votes, voteSkip),

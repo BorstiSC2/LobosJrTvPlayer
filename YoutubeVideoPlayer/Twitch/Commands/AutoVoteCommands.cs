@@ -20,6 +20,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "autovotestatus";
 
+        public string Description =>
+            "Tells you whether Autovote is on. With Autovote, chat gets to vote on the next video a few minutes before each video ends.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -43,6 +46,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "toggleautovote";
+
+        public string Description =>
+            "Turns Autovote on or off. With Autovote, chat gets to vote on the next video a few minutes before each video ends.";
 
         public bool RequiresModerator => true;
 

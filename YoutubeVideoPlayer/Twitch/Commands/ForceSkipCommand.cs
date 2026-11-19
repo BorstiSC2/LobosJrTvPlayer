@@ -18,6 +18,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "forceskip";
 
+        public string Description =>
+            "Skips the current video right away and starts the next one, without a vote.";
+
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown { get; }

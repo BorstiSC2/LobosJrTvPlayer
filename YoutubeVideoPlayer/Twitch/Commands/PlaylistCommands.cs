@@ -21,6 +21,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "playlist";
 
+        public string Description =>
+            "Tells you which playlist is playing right now and whether it plays in random order.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -54,6 +57,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "skipplaylist";
+
+        public string Description =>
+            "Switches to the next playlist right away.";
 
         public bool RequiresModerator => true;
 
@@ -97,6 +103,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public string Name => "playlistshufflestatus";
 
+        public string Description =>
+            "Tells you whether the next playlist is picked at random or the playlists take turns in a fixed order.";
+
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown { get; }
@@ -120,6 +129,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         }
 
         public string Name => "toggleplaylistshuffle";
+
+        public string Description =>
+            "Switches between picking the next playlist at random and going through the playlists in a fixed order.";
 
         public bool RequiresModerator => true;
 
