@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using YouTubeVideoPlayer.Infrastructure;
 using YouTubeVideoPlayer.Playback;
+using YouTubeVideoPlayer.Twitch.Voting;
 
 namespace YouTubeVideoPlayer.Playlists
 {
@@ -29,10 +30,11 @@ namespace YouTubeVideoPlayer.Playlists
     public sealed class PlaylistSwapScheduler : IDisposable
     {
         /// <summary>
-        /// How long before the end of the current video the next playlist is selected: a little earlier than the
-        /// autovote starts (5 minutes before the end), so that its options already come from the next playlist.
+        /// How much earlier than the autovote (<see cref="AutoVoteManager.LeadTime"/>) the next playlist is selected, so
+        /// that the autovote's options already come from the next playlist. It covers two autovote checks and one of
+        /// the scheduler's own.
         /// </summary>
-        public static readonly TimeSpan LeadTime = TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(30);
+        public static readonly TimeSpan LeadTimeMargin = TimeSpan.FromSeconds(30);
 
         /// <summary>How often the scheduler looks whether the swap is due.</summary>
         public static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(5);
@@ -46,17 +48,27 @@ namespace YouTubeVideoPlayer.Playlists
         private readonly SynchronizationContext _context;
         private readonly TimeProvider _time;
         private readonly ContextTimer _timer;
+        /// <summary>
+        /// How long before the end of the current video the next playlist is selected: <see cref="LeadTimeMargin"/>
+        /// before the autovote starts.
+        /// </summary>
+        public TimeSpan LeadTime { get; }
+
         private DateTimeOffset _retryAt = DateTimeOffset.MinValue;
         private bool _swapping;
         private bool _nothingToSwapToLogged;
         private bool _disposed;
 
         /// <param name="isVoteRunning">Whether a chat vote is running (<c>null</c> without the Twitch bot).</param>
+        /// <param name="autoVoteLeadTime">
+        /// The autovote's <see cref="AutoVoteManager.LeadTime"/>; <see cref="AutoVoteManager.DefaultLeadTime"/> without the Twitch bot.
+        /// </param>
         public PlaylistSwapScheduler(
             PlaylistManager playlists,
             IPlaybackControl playback,
             Func<bool>? isVoteRunning = null,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null,
+            TimeSpan? autoVoteLeadTime = null)
         {
             _context = SynchronizationContext.Current
                 ?? throw new InvalidOperationException("PlaylistSwapScheduler must be created on the UI thread.");
@@ -65,6 +77,7 @@ namespace YouTubeVideoPlayer.Playlists
             _playback = playback;
             _isVoteRunning = isVoteRunning ?? (() => false);
             _time = timeProvider ?? TimeProvider.System;
+            LeadTime = (autoVoteLeadTime ?? AutoVoteManager.DefaultLeadTime) + LeadTimeMargin;
             _timer = new ContextTimer(_context, CheckInterval, periodic: true, Check, _time);
             _timer.Start();
 

@@ -92,7 +92,18 @@ public class PlaylistSwapSchedulerTests
 
     [Fact]
     public void TheNextPlaylistTakesOverBeforeTheAutovoteStarts() =>
-        Assert.True(PlaylistSwapScheduler.LeadTime >= AutoVoteManager.LeadTime + 2 * AutoVoteManager.CheckInterval + PlaylistSwapScheduler.CheckInterval);
+        Assert.True(PlaylistSwapScheduler.LeadTimeMargin >= 2 * AutoVoteManager.CheckInterval + PlaylistSwapScheduler.CheckInterval);
+
+    [Fact]
+    public void TheLeadTimeFollowsTheAutovote() => UiContext.Run(async () =>
+    {
+        using var setup = await Setup.CreateAsync();
+        Assert.Equal(AutoVoteManager.DefaultLeadTime + PlaylistSwapScheduler.LeadTimeMargin, setup.Scheduler.LeadTime);
+
+        using var configured = new PlaylistSwapScheduler(
+            setup.Manager, setup.Playback, timeProvider: setup.Time, autoVoteLeadTime: TimeSpan.FromMinutes(8));
+        Assert.Equal(TimeSpan.FromMinutes(8) + PlaylistSwapScheduler.LeadTimeMargin, configured.LeadTime);
+    });
 
     [Fact]
     public void Constructor_RequiresASynchronizationContext()
@@ -133,11 +144,11 @@ public class PlaylistSwapSchedulerTests
         Assert.True(setup.Manager.IsSwapDue);
         Assert.Equal(IdA, setup.Manager.SelectedKey); // 30 minutes are left: the video plays on
 
-        setup.Remaining(PlaylistSwapScheduler.LeadTime + TimeSpan.FromSeconds(1));
+        setup.Remaining(setup.Scheduler.LeadTime + TimeSpan.FromSeconds(1));
         await setup.TickAsync();
         Assert.Equal(IdA, setup.Manager.SelectedKey);
 
-        setup.Remaining(PlaylistSwapScheduler.LeadTime);
+        setup.Remaining(setup.Scheduler.LeadTime);
         await setup.TickAsync();
 
         Assert.Equal(IdB, setup.Manager.SelectedKey);

@@ -29,7 +29,14 @@ namespace YouTubeVideoPlayer.Playback
         /// playback has started; if the media cannot be started, <see cref="EncounteredError"/> is raised.
         /// </summary>
         /// <param name="audioUrl">A separate audio stream played along with the video, or <c>null</c>.</param>
-        void Play(string videoUrl, string? audioUrl);
+        /// <param name="startAt">Where to start in the video (used to resume a video whose stream broke off).</param>
+        void Play(string videoUrl, string? audioUrl, TimeSpan startAt = default);
+
+        /// <summary>
+        /// The player's own most recent warnings and errors (oldest first), e.g. why a stream connection failed, so
+        /// they can be written to the log when a video ends early, freezes or fails.
+        /// </summary>
+        string[] RecentLog();
 
         /// <summary>Pauses the current media (it keeps its position). Does nothing if nothing is loaded.</summary>
         void Pause();

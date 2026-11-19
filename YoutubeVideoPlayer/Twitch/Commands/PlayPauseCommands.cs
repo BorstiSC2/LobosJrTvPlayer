@@ -36,7 +36,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
             }
             else if (_playback.IsWaitingForHold)
             {
-                reply = "The next video starts when the vote is over (!skip starts it now).";
+                reply = "The next video starts when the vote is over (!forceskip starts it now).";
             }
             else if (_playback.IsPaused)
             {

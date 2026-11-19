@@ -80,6 +80,7 @@ namespace YouTubeVideoPlayer.Twitch
             _client = client ?? new TwitchClient();
             _client.OnJoinedChannel += OnJoinedChannelAsync;
             _client.OnChatCommandReceived += OnChatCommandReceivedAsync;
+            _client.OnMessageReceived += OnMessageReceivedAsync;
             _client.OnIncorrectLogin += OnIncorrectLoginAsync;
             _client.OnDisconnected += OnDisconnectedAsync;
             _client.OnReconnected += OnReconnectedAsync;
@@ -108,6 +109,8 @@ namespace YouTubeVideoPlayer.Twitch
         public event EventHandler<TwitchConnectionState>? StateChanged;
 
         public event EventHandler<ChatCommandContext>? CommandReceived;
+
+        public event EventHandler<ChatMessageInfo>? MessageReceived;
 
         public async Task StartAsync()
         {
@@ -310,6 +313,14 @@ namespace YouTubeVideoPlayer.Twitch
                 message.IsBroadcaster);
 
             Post(() => CommandReceived?.Invoke(this, command));
+            return Task.CompletedTask;
+        }
+
+        private Task OnMessageReceivedAsync(object? sender, OnMessageReceivedArgs e)
+        {
+            // Every message, commands included.
+            var message = new ChatMessageInfo(e.ChatMessage.UserId, e.ChatMessage.Username.ToLowerInvariant());
+            Post(() => MessageReceived?.Invoke(this, message));
             return Task.CompletedTask;
         }
 

@@ -17,11 +17,19 @@ namespace YouTubeVideoPlayer.Twitch
         bool IsModerator,
         bool IsBroadcaster);
 
+    /// <summary>The sender of a chat message (any message, commands included).</summary>
+    /// <param name="UserId">The numeric Twitch user ID of the sender.</param>
+    /// <param name="Username">The login name of the sender (lower case).</param>
+    public sealed record ChatMessageInfo(string UserId, string Username);
+
     /// <summary>A chat that delivers commands and accepts messages (implemented by <see cref="TwitchChatService"/>).</summary>
     public interface IChatChannel
     {
         /// <summary>Raised on the UI thread for every chat command.</summary>
         event EventHandler<ChatCommandContext>? CommandReceived;
+
+        /// <summary>Raised on the UI thread for every chat message, commands included (used to count the chatters).</summary>
+        event EventHandler<ChatMessageInfo>? MessageReceived;
 
         /// <summary>The bot is connected to the chat and can send messages.</summary>
         bool IsConnected { get; }

@@ -53,7 +53,7 @@ public class PlaylistSwapEndToEndTests
         using var autoVote = new AutoVoteManager(chat, playback, votes, time);
         using var announcer = new PlaylistAnnouncer(chat, manager, playback);
         using var coordinator = new AppCoordinator(playback, manager, null);
-        using var scheduler = new PlaylistSwapScheduler(manager, playback, () => votes.IsRunning, time);
+        using var scheduler = new PlaylistSwapScheduler(manager, playback, () => votes.IsRunning, time, autoVote.LeadTime);
 
         async Task StepAsync(TimeSpan by)
         {
@@ -86,7 +86,7 @@ public class PlaylistSwapEndToEndTests
         Assert.True(manager.IsSwapDue);
         Assert.Equal(IdA, manager.SelectedKey);
         await StepUntilAsync(() => manager.SelectedKey == IdB, TimeSpan.FromSeconds(5), 20, "Beta should take over before the end");
-        Assert.True(playback.Length - playback.Position > AutoVoteManager.LeadTime);
+        Assert.True(playback.Length - playback.Position > autoVote.LeadTime);
         Assert.Equal(new[] { first }, Played()); // not skipped
         Assert.DoesNotContain(sent, m => m.StartsWith("New Playlist"));
 
@@ -101,6 +101,8 @@ public class PlaylistSwapEndToEndTests
         await StepAsync(TimeSpan.FromSeconds(5)); // the winner is prepared in advance
         Assert.Equal(new[] { first }, Played());
 
+        // The video plays to its end (an end reported well before the length would be a broken stream).
+        await StepAsync(VideoLength - (time.GetUtcNow() - videoStart));
         player.EndReached += Raise.Event();
         await StepUntilAsync(() => Played().Count == 2, TimeSpan.FromSeconds(1), 5, "the winner should play");
 

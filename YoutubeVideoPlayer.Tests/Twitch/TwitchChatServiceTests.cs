@@ -762,5 +762,21 @@ public class TwitchChatServiceTests
         Assert.Equal(("vote", "3", false, false), (received[2].Name, received[2].Arguments.Single(), received[2].IsModerator, received[2].IsBroadcaster));
     });
 
+    [Fact]
+    public void EveryMessage_RaisesMessageReceived_CommandsIncluded() => UiContext.Run(async () =>
+    {
+        var client = new TwitchClient();
+        client.Initialize(new ConnectionCredentials("lobosbot", "oauth:x"), "lobosjr");
+        var chat = new TwitchChatService(ManualSettings, null, client);
+        var received = new List<ChatMessageInfo>();
+        chat.MessageReceived += (_, m) => received.Add(m);
+
+        await client.OnReadLineTestAsync(PrivMsg("Viewer", "333", "", "just chatting"));
+        await client.OnReadLineTestAsync(PrivMsg("somemod", "111", "moderator/1", "!skip"));
+        await Async.SettleAsync();
+
+        Assert.Equal(new[] { new ChatMessageInfo("333", "viewer"), new ChatMessageInfo("111", "somemod") }, received);
+    });
+
     #endregion
 }

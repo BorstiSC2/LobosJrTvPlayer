@@ -37,7 +37,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public TimeSpan Cooldown { get; }
 
         public Task<string?> ExecuteAsync(ChatCommandContext context) =>
-            Task.FromResult<string?>(CommandList.Describe("Commands", _commands().Where(c => !c.RequiresModerator && !ReferenceEquals(c, this))));
+            Task.FromResult<string?>(CommandList.Describe("Commands", _commands().Where(c => !c.IsHidden && !c.RequiresModerator && !ReferenceEquals(c, this))));
     }
 
     /// <summary>
@@ -62,6 +62,6 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public TimeSpan Cooldown { get; }
 
         public Task<string?> ExecuteAsync(ChatCommandContext context) =>
-            Task.FromResult<string?>(CommandList.Describe("Moderator commands", _commands().Where(c => c.RequiresModerator && !ReferenceEquals(c, this))));
+            Task.FromResult<string?>(CommandList.Describe("Moderator commands", _commands().Where(c => !c.IsHidden && c.RequiresModerator && !ReferenceEquals(c, this))));
     }
 }

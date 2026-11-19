@@ -116,7 +116,7 @@ public class PlayPauseCommandTests
     {
         var playback = Playback(waiting: true);
 
-        Assert.Equal("The next video starts when the vote is over (!skip starts it now).", await PlayAsync(playback));
+        Assert.Equal("The next video starts when the vote is over (!forceskip starts it now).", await PlayAsync(playback));
         await playback.DidNotReceive().PlayNextAsync();
     }
 

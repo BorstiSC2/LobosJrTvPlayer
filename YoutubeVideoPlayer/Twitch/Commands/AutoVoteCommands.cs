@@ -25,7 +25,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public TimeSpan Cooldown { get; }
 
         public Task<string?> ExecuteAsync(ChatCommandContext context) =>
-            Task.FromResult<string?>(AutoVoteTexts.Status(_autoVote.Enabled, changed: false));
+            Task.FromResult<string?>(AutoVoteTexts.Status(_autoVote, changed: false));
     }
 
     /// <summary>
@@ -51,18 +51,18 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public Task<string?> ExecuteAsync(ChatCommandContext context)
         {
             _autoVote.Enabled = !_autoVote.Enabled;
-            return Task.FromResult<string?>(AutoVoteTexts.Status(_autoVote.Enabled, changed: true));
+            return Task.FromResult<string?>(AutoVoteTexts.Status(_autoVote, changed: true));
         }
     }
 
     /// <summary>The chat texts that describe the Autovote option.</summary>
     internal static class AutoVoteTexts
     {
-        public static string Status(bool enabled, bool changed)
+        public static string Status(IAutoVoteControl autoVote, bool changed)
         {
             var now = changed ? "now " : string.Empty;
-            return enabled
-                ? $"Autovote is {now}ON: a vote for the next video starts {(int)AutoVoteManager.LeadTime.TotalMinutes} minutes before the current video ends."
+            return autoVote.Enabled
+                ? $"Autovote is {now}ON: a vote for the next video starts {SkipVoteManager.FormatDuration(autoVote.LeadTime)} before the current video ends."
                 : $"Autovote is {now}OFF: no vote starts by itself.";
         }
     }

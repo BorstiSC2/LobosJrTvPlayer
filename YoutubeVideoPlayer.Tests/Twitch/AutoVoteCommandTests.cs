@@ -14,11 +14,25 @@ public class AutoVoteCommandTests
     private const string On = "Autovote is ON: a vote for the next video starts 5 minutes before the current video ends.";
     private const string Off = "Autovote is OFF: no vote starts by itself.";
 
-    private static IAutoVoteControl Control(bool enabled)
+    private static IAutoVoteControl Control(bool enabled, TimeSpan? leadTime = null)
     {
         var control = Substitute.For<IAutoVoteControl>();
         control.Enabled = enabled; // a substitute property keeps what is set
+        control.LeadTime.Returns(leadTime ?? AutoVoteManager.DefaultLeadTime);
         return control;
+    }
+
+    [Theory]
+    [InlineData(90, "90 seconds")]
+    [InlineData(60, "1 minute")]
+    [InlineData(600, "10 minutes")]
+    public async Task Status_NamesTheConfiguredLeadTime(int seconds, string expected)
+    {
+        var control = Control(true, TimeSpan.FromSeconds(seconds));
+
+        var reply = await new AutoVoteStatusCommand(control, TimeSpan.Zero).ExecuteAsync(Chat.Command("!autovotestatus"));
+
+        Assert.Equal($"Autovote is ON: a vote for the next video starts {expected} before the current video ends.", reply);
     }
 
     [Fact]

@@ -83,4 +83,24 @@ public class VlcMediaPlayerTests
 
         Assert.True(finished.Wait(TimeSpan.FromSeconds(10)));
     }
+
+    [Fact]
+    public void VlcsOwnErrors_AreKeptForTheLog()
+    {
+        using var player = new VlcMediaPlayer();
+        using var finished = new ManualResetEventSlim();
+        player.EncounteredError += (_, _) => finished.Set();
+        player.EndReached += (_, _) => finished.Set();
+
+        // (VLC may log warnings while it starts, e.g. on a machine without a sound device such as the CI runner.)
+        // Starting somewhere in the file must not get in the way of the error either.
+        player.Play(Path.Combine(Path.GetTempPath(), "ytp-tests-missing.mp4"), null, TimeSpan.FromMinutes(50));
+
+        // The messages are in when the event arrives (VLC sends them a few ms after the event; the player waits for them).
+        Assert.True(finished.Wait(TimeSpan.FromSeconds(10)));
+        var log = player.RecentLog();
+        Assert.NotEmpty(log);
+        Assert.Contains(log, line => line.Contains("Error") && line.Contains("ytp-tests-missing.mp4"));
+        Assert.True(log.Length <= VlcMediaPlayer.RecentLogSize);
+    }
 }

@@ -143,7 +143,7 @@ namespace YouTubeVideoPlayer.Playback
                     return;
 
                 entry.VideoId = id;
-                var video = _youtube.ResolveAsync(id, token);
+                var video = VideoLookup.ResolveAsync(_youtube, id, _time, token);
                 entry.Video = video;
 
                 var resolved = await video;

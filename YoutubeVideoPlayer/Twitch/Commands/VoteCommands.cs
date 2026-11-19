@@ -4,28 +4,45 @@ using YouTubeVideoPlayer.Twitch.Voting;
 
 namespace YouTubeVideoPlayer.Twitch.Commands
 {
-    /// <summary><c>!skipvote</c> (privileged): lets the chat vote which video plays next.</summary>
-    public sealed class SkipVoteCommand : IChatCommand
+    /// <summary><c>!forcevoteskip</c> (privileged): lets the chat vote which video plays next, without a <c>!voteskip</c> first.</summary>
+    public sealed class ForceVoteSkipCommand : IChatCommand
     {
         private readonly SkipVoteManager _votes;
+        private readonly VoteSkipManager? _voteSkip;
 
-        public SkipVoteCommand(SkipVoteManager votes) => _votes = votes;
+        /// <param name="voteSkip">The <c>!voteskip</c> vote; while it runs, no other vote starts.</param>
+        public ForceVoteSkipCommand(SkipVoteManager votes, VoteSkipManager? voteSkip = null)
+        {
+            _votes = votes;
+            _voteSkip = voteSkip;
+        }
 
-        public string Name => "skipvote";
+        public string Name => "forcevoteskip";
 
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown => TimeSpan.Zero; // a running vote blocks a second one anyway
 
-        public Task<string?> ExecuteAsync(ChatCommandContext context) => _votes.StartAsync(context);
+        public Task<string?> ExecuteAsync(ChatCommandContext context)
+        {
+            if (_voteSkip is { IsRunning: true })
+                return Task.FromResult<string?>("A !voteskip vote is running – wait for it, or end it with !cancelvote.");
+
+            return _votes.StartAsync(context);
+        }
     }
 
-    /// <summary><c>!cancelvote</c> (privileged): stops the running vote without changing the video.</summary>
+    /// <summary><c>!cancelvote</c> (privileged): stops the running vote (a <c>!voteskip</c> vote too) without changing the video.</summary>
     public sealed class CancelVoteCommand : IChatCommand
     {
         private readonly SkipVoteManager _votes;
+        private readonly VoteSkipManager? _voteSkip;
 
-        public CancelVoteCommand(SkipVoteManager votes) => _votes = votes;
+        public CancelVoteCommand(SkipVoteManager votes, VoteSkipManager? voteSkip = null)
+        {
+            _votes = votes;
+            _voteSkip = voteSkip;
+        }
 
         public string Name => "cancelvote";
 
@@ -33,7 +50,8 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public TimeSpan Cooldown => TimeSpan.Zero;
 
-        public Task<string?> ExecuteAsync(ChatCommandContext context) => Task.FromResult<string?>(_votes.Cancel(context));
+        public Task<string?> ExecuteAsync(ChatCommandContext context) =>
+            Task.FromResult<string?>(_voteSkip?.Cancel(context) ?? _votes.Cancel(context));
     }
 
     /// <summary><c>!vote n</c> (everyone): votes for option n of the running vote. No reply, to keep the chat clean.</summary>
@@ -48,6 +66,8 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public bool RequiresModerator => false;
 
         public TimeSpan Cooldown => TimeSpan.Zero;
+
+        public bool IsHidden => true; // the vote names it
 
         public Task<string?> ExecuteAsync(ChatCommandContext context)
         {

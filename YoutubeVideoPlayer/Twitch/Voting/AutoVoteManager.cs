@@ -11,6 +11,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     {
         /// <summary>Whether a vote for the next video starts by itself before a video ends.</summary>
         bool Enabled { get; set; }
+
+        /// <summary>How long before the end of a video the vote starts.</summary>
+        TimeSpan LeadTime { get; }
     }
 
     /// <summary>
@@ -30,8 +33,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     /// </remarks>
     public sealed class AutoVoteManager : IAutoVoteControl, IDisposable
     {
-        /// <summary>How long before the end of a video the vote starts.</summary>
-        public static readonly TimeSpan LeadTime = TimeSpan.FromMinutes(5);
+        /// <summary>How long before the end of a video the vote starts, unless <c>twitchsettings.json</c> sets another time.</summary>
+        public static readonly TimeSpan DefaultLeadTime = TimeSpan.FromMinutes(5);
 
         /// <summary>How often the remaining time of the current video is checked.</summary>
         public static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(5);
@@ -50,15 +53,19 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private readonly SkipVoteManager _votes;
         private readonly ContextTimer _timer;
         private readonly TimeProvider _time;
+        private readonly Func<bool> _isOtherVoteRunning;
         private NowPlaying? _handledVideo;
         private bool _enabled;
         private bool _disposed;
 
+        /// <param name="isOtherVoteRunning">Whether another vote (<c>!voteskip</c>) runs; no autovote starts meanwhile.</param>
         public AutoVoteManager(
             IChatChannel chat,
             IPlaybackControl playback,
             SkipVoteManager votes,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null,
+            TimeSpan? leadTime = null,
+            Func<bool>? isOtherVoteRunning = null)
         {
             var context = SynchronizationContext.Current
                 ?? throw new InvalidOperationException("AutoVoteManager must be created on the UI thread.");
@@ -67,6 +74,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             _playback = playback;
             _votes = votes;
             _time = timeProvider ?? TimeProvider.System;
+            LeadTime = leadTime ?? DefaultLeadTime;
+            _isOtherVoteRunning = isOtherVoteRunning ?? (() => false);
             _timer = new ContextTimer(context, CheckInterval, periodic: true, Check, _time);
         }
 
@@ -99,19 +108,23 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             }
         }
 
+        /// <summary>How long before the end of a video the vote starts (<see cref="DefaultLeadTime"/> unless configured).</summary>
+        public TimeSpan LeadTime { get; }
+
         /// <summary>Raised when <see cref="Enabled"/> changed (by the checkbox or by a chat command).</summary>
         public event EventHandler? EnabledChanged;
 
         private void Check()
         {
-            if (!_enabled || _disposed || _votes.IsRunning || !_chat.IsConnected)
+            // While a !voteskip vote runs, wait: the video is not marked as handled, so a later check starts the vote.
+            if (!_enabled || _disposed || _votes.IsRunning || _isOtherVoteRunning() || !_chat.IsConnected)
                 return;
 
             var current = _playback.Current;
             if (current == null || ReferenceEquals(current, _handledVideo) || !_playback.IsPlaying)
                 return;
 
-            // Without a known length (live stream) there is no "5 minutes before the end".
+            // Without a known length (live stream) there is no "minutes before the end".
             if (_playback.Length is not { } length || length <= TimeSpan.Zero)
                 return;
 

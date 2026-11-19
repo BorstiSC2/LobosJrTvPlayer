@@ -792,6 +792,113 @@ public class SkipVoteManagerTests
     });
 
     #endregion
+
+    #region Display for the vote ticker
+
+    [Fact]
+    public void Display_IsNull_UntilTheOptionsAreKnown_ThenShowsThemWithoutTime() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
+        setup.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+        var changes = 0;
+        setup.Manager.DisplayChanged += (_, _) => changes++;
+
+        var start = setup.Manager.StartAsync(TestSupport.Chat.Command("!forcevoteskip", user: "mod"));
+        await Async.SettleAsync();
+        Assert.True(setup.Manager.IsRunning);
+        Assert.Null(setup.Manager.Display);
+        Assert.Equal(0, changes);
+
+        lookup.SetResult(new YouTubeVideoDetails("Same title", null));
+        await start;
+
+        var display = setup.Manager.Display!;
+        Assert.Equal(1, changes);
+        Assert.Equal(VoteKind.NextVideo, display.Kind);
+        Assert.Equal(
+            new (string?, string, string, int)[] { ("1", "Same title", "!vote 1", 0), ("2", "Same title", "!vote 2", 0), ("3", "Same title", "!vote 3", 0) },
+            display.Options.Select(o => (o.Number, o.Title, o.Command, o.Votes)));
+        Assert.Null(display.Subject);
+        Assert.Null(display.TimeLeft);
+    });
+
+    [Fact]
+    public void Display_CountsDownOnceTheCountdownRuns() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        var changes = 0;
+        setup.Manager.DisplayChanged += (_, _) => changes++;
+
+        await setup.AnnounceAsync();
+        Assert.Equal(1, changes); // the countdown started
+        Assert.Equal(TimeSpan.FromMinutes(2), setup.Manager.Display!.TimeLeft);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(50));
+        Assert.Equal(TimeSpan.FromSeconds(70), setup.Manager.Display!.TimeLeft);
+    });
+
+    [Fact]
+    public void Display_ShowsTheVotes_AndChangesOnlyWhenATallyChanges() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        var changes = 0;
+        setup.Manager.DisplayChanged += (_, _) => changes++;
+
+        setup.Vote("a", "2");
+        setup.Vote("b", "2");
+        setup.Vote("b", "2"); // the same vote again
+        setup.Vote("c", "9"); // not an option
+        setup.Vote("a", "1"); // changed
+
+        Assert.Equal(3, changes);
+        Assert.Equal(new[] { 1, 1, 0 }, setup.Manager.Display!.Options.Select(o => o.Votes));
+    });
+
+    [Fact]
+    public void Display_IsGone_AfterTheVoteEnds_IsCancelled_OrDisposed() => UiContext.Run(async () =>
+    {
+        using (var setup = new Setup())
+        {
+            await setup.StartAsync();
+            var changes = 0;
+            setup.Manager.DisplayChanged += (_, _) => changes++;
+            await setup.FinishAsync();
+            Assert.Null(setup.Manager.Display);
+            Assert.True(changes >= 2); // the countdown started, the vote ended
+        }
+
+        using (var setup = new Setup())
+        {
+            await setup.StartAsync();
+            var changed = false;
+            setup.Manager.DisplayChanged += (_, _) => changed = true;
+            setup.Manager.Cancel(TestSupport.Chat.Command("!cancelvote", user: "mod"));
+            Assert.True(changed);
+            Assert.Null(setup.Manager.Display);
+        }
+
+        using (var setup = new Setup())
+        {
+            await setup.StartAsync();
+            setup.Manager.Dispose();
+            Assert.Null(setup.Manager.Display);
+        }
+    });
+
+    [Fact]
+    public void Display_OfAnAutovote_SaysItIsAboutTheVideoAfterThisOne() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+
+        await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromSeconds(45));
+
+        Assert.Equal(VoteKind.VideoAfterCurrent, setup.Manager.Display!.Kind);
+    });
+
+    #endregion
 }
 
 public class VoteCommandTests
@@ -811,9 +918,9 @@ public class VoteCommandTests
     {
         var (votes, _) = CreateVotes();
 
-        IChatCommand[] commands = { new SkipVoteCommand(votes), new CancelVoteCommand(votes), new VoteCommand(votes) };
+        IChatCommand[] commands = { new ForceVoteSkipCommand(votes), new CancelVoteCommand(votes), new VoteCommand(votes) };
 
-        Assert.Equal(new[] { "skipvote", "cancelvote", "vote" }, commands.Select(c => c.Name));
+        Assert.Equal(new[] { "forcevoteskip", "cancelvote", "vote" }, commands.Select(c => c.Name));
         Assert.Equal(new[] { true, true, false }, commands.Select(c => c.RequiresModerator));
         Assert.All(commands, c => Assert.Equal(TimeSpan.Zero, c.Cooldown));
     }
@@ -823,7 +930,7 @@ public class VoteCommandTests
     {
         var (votes, _) = CreateVotes();
 
-        Assert.Null(await new SkipVoteCommand(votes).ExecuteAsync(Chat.Command("!skipvote")));
+        Assert.Null(await new ForceVoteSkipCommand(votes).ExecuteAsync(Chat.Command("!forcevoteskip")));
         Assert.True(votes.IsRunning);
         Assert.Null(await new VoteCommand(votes).ExecuteAsync(Chat.Command("!vote 1")));
         Assert.Equal("The vote was cancelled by MOD.", await new CancelVoteCommand(votes).ExecuteAsync(Chat.Command("!cancelvote", user: "mod")));

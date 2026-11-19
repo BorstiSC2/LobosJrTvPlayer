@@ -761,6 +761,39 @@ public class PlaybackManagerTests
     });
 
     [Fact]
+    public void Standby_IsReadyWhenTheLookupHangs_OnceTheTimeLimitHasPassed() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        setup.YouTube.ResolveAsync("v1", Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource<ResolvedVideo>().Task);
+        setup.Manager.EnterStandby();
+        await Async.SettleAsync();
+        Assert.False(setup.Manager.IsStandbyReady);
+
+        await setup.AdvanceAsync(VideoLookup.TimeLimit);
+        Assert.True(setup.Manager.IsStandbyReady);
+
+        // Play looks up another video, which answers.
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        Assert.Equal(new[] { "v2.video" }, setup.PlayedVideos());
+    });
+
+    [Fact]
+    public void ALookupThatHangs_MovesOnToTheNextVideo_AfterTheTimeLimit() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        setup.YouTube.ResolveAsync("v1", Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource<ResolvedVideo>().Task);
+
+        var play = setup.Manager.PlayNextAsync();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        await setup.AdvanceAsync(VideoLookup.TimeLimit);
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        await play;
+
+        Assert.Equal(new[] { "v2.video" }, setup.PlayedVideos());
+        Assert.Equal(new string?[] { null, "v1" }, setup.NextRequests.Take(2)); // v2 follows the one that failed
+    });
+
+    [Fact]
     public void PlayNext_AfterStandby_StartsThePreparedVideo_WithoutWaitingOrLookingItUpAgain() => UiContext.Run(async () =>
     {
         using var setup = new PlaybackSetup().Queue("v1", "v2");
@@ -1053,9 +1086,14 @@ public class PlaybackManagerTests
         });
         setup.Player.IsPlaying.Returns(false);
 
+        // As long as the lookup may take: at least the two checks in a row that skip a frozen video.
+        var checks = (int)(VideoLookup.TimeLimit / PlaybackManager.FailSafeInterval);
+        Assert.True(checks >= 2);
+
         var task = setup.Manager.PlayNextAsync();
-        for (var check = 0; check < 6; check++) // two minutes: far more than two checks in a row
-            await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        for (var check = 0; check < checks; check++)
+            await setup.AdvanceAsync(PlaybackManager.FailSafeInterval - TimeSpan.FromSeconds(1) / checks);
 
         Assert.False(cancelled);
         Assert.False(task.IsCompleted);
@@ -1078,18 +1116,19 @@ public class PlaybackManagerTests
     });
 
     [Fact]
-    public void FailSafe_SkipsAFrozenVideo() => UiContext.Run(async () =>
+    public void FailSafe_SkipsAFrozenVideo_WhenResumingItDidNotHelp() => UiContext.Run(async () =>
     {
         using var setup = new PlaybackSetup().Queue("v1", "v2");
         await setup.RunAsync(setup.Manager.PlayNextAsync);
         setup.Player.IsPlaying.Returns(true);
-        setup.Player.TimeMs.Returns(5000L); // position does not move
+        setup.Player.TimeMs.Returns(5000L); // position does not move, also after each resume
 
-        for (var check = 0; check < 3; check++)
+        for (var check = 0; check < 10; check++)
             await setup.AdvanceAsync(PlaybackManager.FailSafeInterval);
         await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
 
-        Assert.Equal(new[] { "v1.video", "v2.video" }, setup.PlayedVideos());
+        // Two resumes, then the next video.
+        Assert.Equal(new[] { "v1.video", "v1.video", "v1.video", "v2.video" }, setup.PlayedVideos());
     });
 
     [Fact]

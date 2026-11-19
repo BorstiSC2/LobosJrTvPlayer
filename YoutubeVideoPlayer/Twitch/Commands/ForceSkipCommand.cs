@@ -5,18 +5,18 @@ using YouTubeVideoPlayer.Playback;
 
 namespace YouTubeVideoPlayer.Twitch.Commands
 {
-    /// <summary><c>!skip</c> (moderators and broadcaster only): skips to the next video.</summary>
-    public sealed class SkipCommand : IChatCommand
+    /// <summary><c>!forceskip</c> (moderators and broadcaster only): skips to the next video at once, without a vote.</summary>
+    public sealed class ForceSkipCommand : IChatCommand
     {
         private readonly IPlaybackControl _playback;
 
-        public SkipCommand(IPlaybackControl playback, TimeSpan cooldown)
+        public ForceSkipCommand(IPlaybackControl playback, TimeSpan cooldown)
         {
             _playback = playback;
             Cooldown = cooldown;
         }
 
-        public string Name => "skip";
+        public string Name => "forceskip";
 
         public bool RequiresModerator => true;
 
@@ -27,7 +27,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
             var title = _playback.Current?.Title;
 
             // Loading the next video can take a while, so reply right away instead of awaiting it.
-            _playback.SkipAsync().FireAndForget("Skipping via !skip failed.");
+            _playback.SkipAsync().FireAndForget("Skipping via !forceskip failed.");
 
             var reply = string.IsNullOrWhiteSpace(title)
                 ? $"Skipped to the next video (requested by {context.DisplayName})."

@@ -6,6 +6,7 @@ using NSubstitute;
 using TwitchLib.Client.Events;
 using TwitchLib.Client.Interfaces;
 using TwitchLib.Communication.Events;
+using YouTubeVideoPlayer.Infrastructure;
 using YouTubeVideoPlayer.Playback;
 using YouTubeVideoPlayer.Playlists;
 using YouTubeVideoPlayer.Tests.TestSupport;
@@ -26,8 +27,9 @@ public class VideoPlayerFormTests
     private sealed class TestableForm : VideoPlayerForm
     {
         public TestableForm(PlaybackManager playback, PlaylistManager playlists, AppCoordinator coordinator,
-            TwitchChatService? twitch, TwitchTokenManager? tokens, string botName, AutoVoteManager? autoVote = null)
-            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote)
+            TwitchChatService? twitch, TwitchTokenManager? tokens, string botName, AutoVoteManager? autoVote = null,
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null)
+            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays)
         {
         }
 
@@ -55,11 +57,15 @@ public class VideoPlayerFormTests
             if (Twitch != null)
             {
                 Votes = new SkipVoteManager(Twitch, Playback, PlaylistManager, Playlists.YouTube, TimeSpan.FromMinutes(2), SkipVoteManager.OptionCount, Time);
-                AutoVote = new AutoVoteManager(Twitch, Playback, Votes, Time);
+                VoteSkip = new VoteSkipManager(
+                    Twitch, Playback, Votes, () => 1, TimeSpan.FromSeconds(60), TimeSpan.FromMinutes(30), 75, Time);
+                AutoVote = new AutoVoteManager(Twitch, Playback, Votes, Time, isOtherVoteRunning: () => VoteSkip.IsRunning);
             }
 
             Coordinator = new AppCoordinator(Playback, PlaylistManager, Twitch);
-            Form = new TestableForm(Playback, PlaylistManager, Coordinator, Twitch, tokens, "lobosbot", AutoVote);
+            Form = new TestableForm(
+                Playback, PlaylistManager, Coordinator, Twitch, tokens, "lobosbot", AutoVote,
+                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes });
         }
 
         public PlaylistSetup Playlists { get; }
@@ -78,19 +84,26 @@ public class VideoPlayerFormTests
 
         public AutoVoteManager? AutoVote { get; }
 
+        public VoteSkipManager? VoteSkip { get; }
+
         public CheckBox AutoVoteCheckBox => Form.All<CheckBox>().Single();
 
         public AppCoordinator Coordinator { get; }
 
         public TestableForm Form { get; }
 
-        public Label TitleLabel => Form.All<Label>().Single(l => l.AutoEllipsis);
+        public TitleStrip TitleStrip => Form.All<TitleStrip>().Single();
+
+        /// <summary>What the vote ticker shows, as one line; <c>null</c> without a ticker.</summary>
+        public string? Ticker => TitleStrip.Ticker?.PlainText;
 
         public Label VolumeLabel => Form.All<Label>().Single(l => l.Size == new Size(100, 40));
 
-        public Label BufferingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 150);
+        public OverlayPill BufferingLabel => Form.All<OverlayPill>().Single(l => l.Name == "buffering");
 
-        public Label WaitingLabel => Form.All<Label>().Single(l => l.Font.Size == 14 && l.Width == 480);
+        public OverlayPill WaitingLabel => Form.All<OverlayPill>().Single(l => l.Name == "waiting");
+
+        public OverlayPill ResumeLabel => Form.All<OverlayPill>().Single(l => l.Name == "resume");
 
         public Label TwitchLabel => Form.All<Label>().Single(l => l.Dock == DockStyle.Fill);
 
@@ -127,6 +140,7 @@ public class VideoPlayerFormTests
         {
             Form.Dispose();
             AutoVote?.Dispose();
+            VoteSkip?.Dispose();
             Votes?.Dispose();
             Coordinator.Dispose();
             Playback.Dispose();
@@ -256,14 +270,14 @@ public class VideoPlayerFormTests
 
         Assert.True(app.Playback.IsStandbyReady);
         Assert.Null(app.Playback.Current);
-        Assert.Equal("Ready - press Play to start", app.TitleLabel.Text);
+        Assert.Equal("Ready - press Play to start", app.TitleStrip.Title);
         Assert.True(app.Form.Button("Play").Enabled);
-        Assert.True(app.TitleLabel.Visible);
+        Assert.True(app.TitleStrip.Visible);
         app.Player.DidNotReceiveWithAnyArgs().Play(default!, default);
 
         await app.PressPlayAsync();
 
-        Assert.StartsWith("Title a", app.TitleLabel.Text);
+        Assert.StartsWith("Title a", app.TitleStrip.Title);
         Assert.Equal("Pause", app.Form.All<Button>().Single(b => b.Text == "Pause").Text);
     }, sta: true);
 
@@ -281,13 +295,13 @@ public class VideoPlayerFormTests
 
         Assert.False(app.Playback.IsStandbyReady);
         Assert.False(app.Form.Button("Play").Enabled);
-        Assert.DoesNotContain("Ready", app.TitleLabel.Text);
+        Assert.DoesNotContain("Ready", app.TitleStrip.Title);
 
         lookup.SetResult(PlaybackSetup.Resolved("a1"));
         await Async.WaitUntilAsync(() => app.Playback.IsStandbyReady);
 
         Assert.True(app.Form.Button("Play").Enabled);
-        Assert.Equal("Ready - press Play to start", app.TitleLabel.Text);
+        Assert.Equal("Ready - press Play to start", app.TitleStrip.Title);
     }, sta: true);
 
     [Fact]
@@ -316,12 +330,50 @@ public class VideoPlayerFormTests
         app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 10f);
         await Async.SettleAsync();
         Assert.True(app.BufferingLabel.Visible);
-        Assert.StartsWith("Buffering", app.BufferingLabel.Text);
-        await Async.WaitUntilAsync(() => app.BufferingLabel.Text != "Buffering...", because: "the spinner animates");
+        Assert.StartsWith("Buffering", app.BufferingLabel.ShownText);
+        await Async.WaitUntilAsync(() => app.BufferingLabel.ShownText != "Buffering ...", because: "the dots animate");
 
         app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 100f);
         await Async.SettleAsync();
         Assert.False(app.BufferingLabel.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void WhileABrokenStreamIsResumed_ALabelSaysSo_InsteadOfTheBufferingLabel() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        app.Player.IsPlaying.Returns(true);
+        app.Player.TimeMs.Returns(61_000L);
+        app.Time.Advance(PlaybackManager.FailSafeInterval); // the watchdog sees the position
+        await Async.SettleAsync();
+        Assert.False(app.ResumeLabel.Visible);
+
+        // The stream breaks off 1:01 into the 3-minute video; the resumed one buffers and seeks (position 0).
+        app.Player.TimeMs.Returns(0L);
+        app.Player.EndReached += Raise.Event();
+        await Async.WaitUntilAsync(() => app.Playback.IsResuming);
+        app.Player.Buffering += Raise.Event<EventHandler<float>>(app.Player, 10f);
+        await Async.SettleAsync();
+
+        Assert.True(app.ResumeLabel.Visible);
+        Assert.Equal("Connection lost - resuming at 0:58", app.ResumeLabel.Text); // the dots after it animate
+        Assert.False(app.BufferingLabel.Visible); // same place in the middle: the resume label says enough
+        await Async.WaitUntilAsync(() => app.ResumeLabel.ShownText != "Connection lost - resuming at 0:58 ...", because: "the dots animate");
+
+        // It plays on at its start point: the label goes, and the buffering that is still going on shows.
+        var position = 58_000L;
+        app.Player.TimeMs.Returns(_ => position += 500);
+        for (var check = 0; check < 2; check++)
+        {
+            app.Time.Advance(PlaybackManager.ResumeCheckInterval);
+            await Async.SettleAsync();
+        }
+
+        Assert.False(app.Playback.IsResuming);
+        Assert.False(app.ResumeLabel.Visible);
+        Assert.True(app.BufferingLabel.Visible);
     }, sta: true);
 
     [Fact]
@@ -338,7 +390,7 @@ public class VideoPlayerFormTests
 
         Assert.True(app.WaitingLabel.Visible);
         Assert.Equal("Waiting for vote to finish... 2:00", app.WaitingLabel.Text);
-        Assert.False(app.TitleLabel.Visible); // the finished video's title is gone with its picture
+        Assert.Equal(string.Empty, app.TitleStrip.Title); // the finished video's title is gone with its picture
         Assert.False(app.Form.Button("Play").Enabled);
 
         app.Time.Advance(TimeSpan.FromSeconds(65));
@@ -474,6 +526,109 @@ public class VideoPlayerFormTests
 
     #endregion
 
+    #region Vote ticker
+
+    private static App VoteApp()
+    {
+        var playlists = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2", "a3", "a4", "a5");
+        playlists.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => new YouTubeVideoDetails("Option " + call.ArgAt<string>(0), null));
+        return new App(Chat.Client(), playlists: playlists);
+    }
+
+    [Fact]
+    public void WhileAVoteRuns_TheStripScrollsItsOptions_AndTheTitleComesBackAfterwards() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        var title = app.Playback.Current!.Title;
+        Assert.Null(app.Ticker);
+
+        await app.Votes!.StartAsync("mod");
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+
+        Assert.StartsWith("Vote  |  ", app.Ticker);
+        Assert.Contains("1 Option ", app.Ticker);
+        Assert.Contains("(0)", app.Ticker);
+        Assert.EndsWith("!vote 1–3", app.Ticker);
+        Assert.Equal(title, app.TitleStrip.Title); // kept behind the ticker
+
+        app.Votes.Vote(Chat.Command("!vote 2", user: "viewer"));
+        Assert.Contains("(1)", app.Ticker);
+        Assert.True(app.TitleStrip.Ticker!.Items[1].Leading);
+
+        app.Votes.Cancel(Chat.Command("!cancelvote", user: "mod"));
+
+        Assert.Null(app.Ticker);
+        Assert.Equal(title, app.TitleStrip.Title);
+    }, sta: true);
+
+    [Fact]
+    public void TheTickerShowsTheTimeLeft_OnceTheCountdownRuns() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+
+        await app.Votes!.StartAsync("mod");
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+        Assert.Null(app.TitleStrip.Ticker!.Time);
+
+        for (var i = 0; i < SkipVoteManager.OptionCount; i++)
+        {
+            await Async.SettleAsync();
+            app.Time.Advance(SkipVoteManager.MessageDelay);
+        }
+
+        await Async.WaitUntilAsync(() => app.TitleStrip.Ticker!.Time == "2:00");
+        app.Time.Advance(TimeSpan.FromSeconds(30));
+        await Async.WaitUntilAsync(() => app.TitleStrip.Ticker!.Time == "1:30", because: "the ticker is updated every second");
+    }, sta: true);
+
+    [Fact]
+    public void AVoteSkip_ShowsSkipAndStayInTheTicker() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+
+        Assert.Null(app.VoteSkip!.Start(Chat.Command("!voteskip")));
+
+        Assert.StartsWith("Skip this video? 1:00  |  \"Title a", app.Ticker);
+        Assert.Contains("!skip (1 of 1)  ·  !stay (0)", app.Ticker);
+        Assert.EndsWith("Type !skip or !stay", app.Ticker);
+
+        app.VoteSkip.Vote(Chat.Command("!stay", user: "other"), skip: false);
+        Assert.Contains("!skip (1 of 1)  ·  !stay (1)", app.Ticker);
+
+        app.VoteSkip.Cancel(Chat.Command("!cancelvote", user: "mod"));
+        Assert.Null(app.Ticker);
+    }, sta: true);
+
+    [Fact]
+    public void ANewVideoDuringAVote_UpdatesTheTitleBehindTheTicker() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        var first = app.Playback.Current!;
+
+        app.Votes!.StartAfterCurrentAsync(TimeSpan.FromMinutes(2)).FireAndForget("test vote");
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+        Assert.EndsWith("!vote 1–3 for the video after this one", app.Ticker);
+
+        app.Playback.SkipAsync().FireAndForget("test skip");
+        await Async.SettleAsync();
+        app.Time.Advance(PlaybackManager.DelayBeforeNextVideo); // in case the next video was not prepared
+        await Async.WaitUntilAsync(() => !ReferenceEquals(app.Playback.Current, first) && app.Playback.Current != null);
+
+        Assert.NotNull(app.Ticker);
+        Assert.Equal(app.Playback.Current!.Title, app.TitleStrip.Title);
+    }, sta: true);
+
+    #endregion
+
     #region Twitch status
 
     [Fact]
@@ -550,7 +705,7 @@ public class VideoPlayerFormTests
         await Async.WaitUntilAsync(() => dialogOpened);
 
         Assert.Equal("There are no playlists yet. Add a YouTube playlist to start playing.", message);
-        Assert.Equal(string.Empty, app.TitleLabel.Text);
+        Assert.Equal(string.Empty, app.TitleStrip.Title);
     }, sta: true);
 
     [Fact]

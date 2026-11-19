@@ -20,6 +20,12 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>Minimum time between two executions (shared by all users).</summary>
         TimeSpan Cooldown { get; }
 
+        /// <summary>
+        /// <c>true</c> if <c>!vodcommands</c> / <c>!modvodcommands</c> leave the command out: the ballots of a vote
+        /// (<c>!vote</c>, <c>!skip</c>, <c>!stay</c>), which the vote itself names.
+        /// </summary>
+        bool IsHidden => false;
+
         /// <summary>Runs the command and returns the chat reply, or <c>null</c> for no reply.</summary>
         Task<string?> ExecuteAsync(ChatCommandContext context);
     }
