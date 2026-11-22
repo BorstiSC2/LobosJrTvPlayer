@@ -142,6 +142,24 @@ public class WindowModeControllerTests
     }, sta: true);
 
     [Fact]
+    public void IsSwitching_IsTrueOnlyWhileAModeChanges() => UiContext.Run(() =>
+    {
+        using var window = new Window();
+        var seenWhileResizing = new List<bool>();
+        window.Form.Resize += (_, _) => seenWhileResizing.Add(window.Controller.IsSwitching);
+
+        window.Controller.ToggleFullscreen();
+        Assert.False(window.Controller.IsSwitching);
+        window.Controller.ToggleBorderless(); // leaves fullscreen, then enters borderless
+        Assert.False(window.Controller.IsSwitching);
+        window.Controller.ToggleBorderless();
+        Assert.False(window.Controller.IsSwitching);
+
+        Assert.NotEmpty(seenWhileResizing);
+        Assert.All(seenWhileResizing, Assert.True);
+    }, sta: true);
+
+    [Fact]
     public void LeavingBorderlessWhileFullscreen_LeavesBothModes() => UiContext.Run(() =>
     {
         using var window = new Window();

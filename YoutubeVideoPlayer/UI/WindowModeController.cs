@@ -34,10 +34,32 @@ namespace YouTubeVideoPlayer.UI
 
         public bool IsBorderless { get; private set; }
 
+        /// <summary>
+        /// True while a mode is being switched. The window passes through states in between (another border, the
+        /// control bar not yet hidden, maximized for fullscreen) that <see cref="AspectRatioLock"/> must not correct.
+        /// </summary>
+        public bool IsSwitching { get; private set; }
+
         /// <summary>Raised after the window layout changed, so overlays can be repositioned.</summary>
         public event EventHandler? ModeChanged;
 
         public void ToggleFullscreen()
+        {
+            var wasSwitching = IsSwitching;
+            IsSwitching = true;
+            try
+            {
+                SwitchFullscreen();
+            }
+            finally
+            {
+                IsSwitching = wasSwitching;
+            }
+
+            ModeChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void SwitchFullscreen()
         {
             if (!IsFullscreen)
             {
@@ -62,8 +84,6 @@ namespace YouTubeVideoPlayer.UI
                 _form.Bounds = _fullscreenPrevBounds;
                 IsFullscreen = false;
             }
-
-            ModeChanged?.Invoke(this, EventArgs.Empty);
         }
 
         public void ToggleBorderless()
@@ -73,10 +93,18 @@ namespace YouTubeVideoPlayer.UI
             if (IsFullscreen)
                 ToggleFullscreen();
 
-            if (!IsBorderless)
-                EnterBorderless();
-            else
-                ExitBorderless();
+            IsSwitching = true;
+            try
+            {
+                if (!IsBorderless)
+                    EnterBorderless();
+                else
+                    ExitBorderless();
+            }
+            finally
+            {
+                IsSwitching = false;
+            }
 
             ModeChanged?.Invoke(this, EventArgs.Empty);
         }

@@ -46,6 +46,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly CheckBox _autoVoteCheckBox;
         private readonly ToolTip _toolTip = new();
         private readonly WindowModeController _windowModes;
+        private readonly AspectRatioLock _aspectLock;
 
         private readonly System.Windows.Forms.Timer _volumeDisplayTimer;
         private readonly System.Windows.Forms.Timer _bufferingAnimationTimer;
@@ -85,8 +86,9 @@ namespace YouTubeVideoPlayer.UI
             InitializeComponent();
 
             Text = "YouTube Video Player";
-            Width = 1920;
-            Height = 1080;
+            // Only until Load: then the window takes the largest 16:9 size on the monitor with the mouse.
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(1280, 760);
             KeyPreview = true;
 
             // The video view must be added first so it fills the space left by the docked control panel.
@@ -209,6 +211,8 @@ namespace YouTubeVideoPlayer.UI
 
             _windowModes = new WindowModeController(this, _videoView, _controlPanel);
             _windowModes.ModeChanged += (_, __) => UpdateTitleLabelPosition();
+            // The video area keeps 16:9 whatever the window is dragged to (the control bar is not part of it).
+            _aspectLock = new AspectRatioLock(this, _controlPanel, _windowModes);
             _videoView.DoubleClick += (_, __) => _windowModes.ToggleFullscreen();
 
             Resize += (_, __) =>
@@ -627,8 +631,26 @@ namespace YouTubeVideoPlayer.UI
 
         #region Form events and keyboard input
 
+        /// <summary>Keeps the video area at 16:9 (exposed for tests).</summary>
+        internal AspectRatioLock AspectLock => _aspectLock;
+
         private void OnLoad(object? sender, EventArgs e)
         {
+            // A form placed by its caller (tests show it off-screen) stays where it is.
+            if (StartPosition != FormStartPosition.Manual)
+            {
+                var workArea = Screen.FromPoint(Cursor.Position).WorkingArea;
+                _aspectLock.FitToWorkArea(workArea);
+                // The invisible resize border is only measurable once the window is on screen: fit once more, so the
+                // visible frame fills the work area.
+                var startBounds = Bounds;
+                Shown += (_, __) =>
+                {
+                    if (Bounds == startBounds && WindowState == FormWindowState.Normal && !_windowModes.IsFullscreen)
+                        _aspectLock.FitToWorkArea(workArea);
+                };
+            }
+
             _videoView.MediaPlayer = _videoOutput;
             ShowTitle("Loading playlists...");
             _coordinator.StartAsync().FireAndForget("Starting the player failed.");
