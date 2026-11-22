@@ -211,6 +211,146 @@ public class VideoPlayerFormTests
 
     #endregion
 
+    #region Window size (16:9 video)
+
+    /// <summary>Somewhere no screen is, so the tests' windows never show up.</summary>
+    private static readonly Rectangle OffScreenWorkArea = new(-20000, -20000, 1920, 1040);
+
+    private static LibVLCSharp.WinForms.VideoView VideoView(App app) => app.Form.All<LibVLCSharp.WinForms.VideoView>().Single();
+
+    private static void AssertVideoIs16To9(App app)
+    {
+        var video = VideoView(app).ClientSize;
+        Assert.Equal(VideoWindowGeometry.VideoHeightFor(video.Width), video.Height);
+    }
+
+    [Fact]
+    public void ASizeSetFromElsewhere_KeepsTheWidth_AndTheVideoAt16To9() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+
+        app.Form.Size = new Size(1000, 1000);
+
+        Assert.Equal(1000, app.Form.Width);
+        AssertVideoIs16To9(app);
+    }, sta: true);
+
+    [Fact]
+    public void DraggingAnEdge_ScalesTheWindow_SoTheVideoStays16To9() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        app.Form.Size = new Size(1000, 1000);
+        var before = app.Form.Bounds;
+        var rect = new WindowMessages.RECT { Left = before.Left, Top = before.Top, Right = before.Right + 320, Bottom = before.Bottom };
+
+        WindowMessages.SendSizing(app.Form.Handle, VideoWindowGeometry.EdgeBottomRight, ref rect);
+
+        var extra = app.Form.AspectLock.Extra;
+        var videoWidth = rect.Right - rect.Left - extra.Width;
+        Assert.Equal(1320 - extra.Width, videoWidth);
+        Assert.Equal(VideoWindowGeometry.VideoHeightFor(videoWidth), rect.Bottom - rect.Top - extra.Height);
+        Assert.Equal(before.Location, new Point(rect.Left, rect.Top));
+    }, sta: true);
+
+    [Fact]
+    public void Maximize_IsTheLargest16To9Window_AndPressingItAgainRestoresTheWindow() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        app.Form.AspectLock.WorkArea = () => OffScreenWorkArea;
+        app.Form.Size = new Size(1000, 1000);
+        var before = app.Form.Bounds;
+
+        WindowMessages.SendMaximizeCommand(app.Form.Handle);
+
+        Assert.Equal(FormWindowState.Normal, app.Form.WindowState);
+        AssertVideoIs16To9(app);
+        Assert.True(app.Form.Width > before.Width);
+        var outer = Rectangle.Inflate(OffScreenWorkArea, 32, 32); // the invisible resize border may lie outside
+        Assert.True(outer.Contains(app.Form.Bounds));
+
+        WindowMessages.SendMaximizeCommand(app.Form.Handle);
+
+        Assert.Equal(before, app.Form.Bounds);
+    }, sta: true);
+
+    [Fact]
+    public void AMaximizeThatIsNotTheMaximizeCommand_BecomesTheLargest16To9Window() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        app.Form.AspectLock.WorkArea = () => OffScreenWorkArea;
+
+        app.Form.WindowState = FormWindowState.Maximized; // like dragging the window to the top edge
+        await Async.WaitUntilAsync(() => app.Form.WindowState == FormWindowState.Normal);
+
+        AssertVideoIs16To9(app);
+        Assert.True(Rectangle.Inflate(OffScreenWorkArea, 32, 32).Contains(app.Form.Bounds));
+    }, sta: true);
+
+    [Fact]
+    public void Fullscreen_FillsTheMonitor_AndLeavingItBringsBackThe16To9Window() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        app.Form.Size = new Size(1000, 1000);
+        var before = app.Form.Bounds;
+
+        app.Form.Press(Keys.F11);
+        await Async.SettleAsync();
+
+        Assert.Equal(FormWindowState.Maximized, app.Form.WindowState); // not turned into a 16:9 window
+
+        app.Form.Press(Keys.Escape);
+
+        Assert.Equal(before, app.Form.Bounds);
+        AssertVideoIs16To9(app);
+    }, sta: true);
+
+    [Fact]
+    public void Borderless_IsTheVideoOnly_AndStays16To9() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        app.Form.Size = new Size(1000, 1000);
+
+        app.Form.Button("Borderless").PerformClick();
+        app.Form.Width = 800;
+
+        Assert.Equal(VideoWindowGeometry.VideoHeightFor(800), app.Form.Height);
+        AssertVideoIs16To9(app);
+    }, sta: true);
+
+    private static class WindowMessages
+    {
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int WM_SIZING = 0x0214;
+        private const int SC_MAXIMIZE = 0xF030;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        public static void SendSizing(IntPtr hwnd, int edge, ref RECT rect) => SendMessage(hwnd, WM_SIZING, (IntPtr)edge, ref rect);
+
+        public static void SendMaximizeCommand(IntPtr hwnd) => SendMessage(hwnd, WM_SYSCOMMAND, (IntPtr)SC_MAXIMIZE, IntPtr.Zero);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wParam, ref RECT lParam);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+    }
+
+    #endregion
+
     #region Volume controls
 
     [Fact]
