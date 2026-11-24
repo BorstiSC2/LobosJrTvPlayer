@@ -1,23 +1,52 @@
 {
+  "version": 2,
   "enabled": true,
-  "clientId": "your_application_client_id",
-  "botUsername": "your_bot_account",
-  "oAuthToken": "",
-  "channel": "your_channel",
-  "otherCommandsCooldownSeconds": 5,
-  "currentCooldownSeconds": 5,
-  "skipCooldownSeconds": 3,
-  "shuffleCooldownSeconds": 3,
-  "skipVoteDurationSeconds": 120,
-  "autoVoteLeadTimeSeconds": 300,
-  "voteSkipDurationSeconds": 60,
-  "voteSkipPercent": 75,
-  "voteSkipCooldownMinutes": 30,
-  "chatterAverageWindowMinutes": 60,
-  "chatterAverageBucketMinutes": 5,
-  "voteInfoCooldownSeconds": 30,
+  "vodChannel": "your_vod_channel",
+  "mainChannel": "your_main_channel",
+  "signIn": {
+    "clientId": "your_application_client_id",
+    "botLogin": "your_bot_account",
+    "oauthToken": ""
+  },
   "privilegedUsers": [
     "your_login_name",
     "123456789"
-  ]
+  ],
+  "commandCooldownSeconds": {
+    "playbackControl": 3,
+    "current": 5,
+    "playlist": 5,
+    "voteSkip": 5,
+    "voteInfo": 30,
+    "shuffleStatus": 3,
+    "toggleShuffle": 3,
+    "playlistShuffleStatus": 3,
+    "togglePlaylistShuffle": 3,
+    "autoVoteStatus": 5,
+    "toggleAutoVote": 5,
+    "token": 5,
+    "vodCommands": 5,
+    "modVodCommands": 5,
+    "commandHelp": 5
+  },
+  "forceVoteSkip": {
+    "durationSeconds": 120
+  },
+  "autoVote": {
+    "leadTimeSeconds": 400,
+    "durationSeconds": 300
+  },
+  "voteSkip": {
+    "durationSeconds": 120,
+    "requiredPercent": 65,
+    "cooldownMinutes": 30,
+    "nextVideoVoteDurationSeconds": 120
+  },
+  "revote": {
+    "durationSeconds": 45
+  },
+  "chatterAverage": {
+    "windowMinutes": 60,
+    "bucketMinutes": 5
+  }
 }

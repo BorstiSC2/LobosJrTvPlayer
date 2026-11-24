@@ -27,7 +27,7 @@ public class AppCoordinatorTests
             Playback = new PlaybackManager(playlists.YouTube, Playlists, Player, Time);
             Twitch = twitchClient == null
                 ? null
-                : new TwitchChatService(new TwitchSettings { BotUsername = "lobosbot", OAuthToken = "oauth:x", Channel = "lobosjr" }, null, twitchClient);
+                : new TwitchChatService(new TwitchSettings { VodChannel = "lobosjr", SignIn = { BotLogin = "lobosbot", OAuthToken = "oauth:x" } }, null, twitchClient);
             Coordinator = new AppCoordinator(Playback, Playlists, Twitch);
             Coordinator.NoVideosAvailable += (_, _) => NoVideosReports++;
         }

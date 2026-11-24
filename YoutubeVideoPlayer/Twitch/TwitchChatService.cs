@@ -94,7 +94,8 @@ namespace YouTubeVideoPlayer.Twitch
             }
         }
 
-        public string Channel => _settings.Channel;
+        /// <summary>The VOD channel: the only chat the bot joins, reads and posts in.</summary>
+        public string VodChannel => _settings.VodChannel;
 
         /// <summary><c>true</c> if the bot signs in through the app (and can be signed in again from the UI).</summary>
         public bool UsesAppSignIn => _tokens != null;
@@ -117,7 +118,7 @@ namespace YouTubeVideoPlayer.Twitch
             if (_tokens == null)
             {
                 _started = true;
-                await ConnectAsync(_settings.BotUsername, _settings.OAuthToken);
+                await ConnectAsync(_settings.SignIn.BotLogin, _settings.SignIn.OAuthToken);
                 return;
             }
 
@@ -141,7 +142,7 @@ namespace YouTubeVideoPlayer.Twitch
 
             try
             {
-                await Task.Run(() => _client.SendMessageAsync(_settings.Channel, message));
+                await Task.Run(() => _client.SendMessageAsync(_settings.VodChannel, message));
             }
             catch (Exception ex)
             {
@@ -195,7 +196,7 @@ namespace YouTubeVideoPlayer.Twitch
 
                 if (!_initialized)
                 {
-                    _client.Initialize(credentials, _settings.Channel);
+                    _client.Initialize(credentials, _settings.VodChannel);
                     _initialized = true;
                 }
                 else
@@ -204,7 +205,7 @@ namespace YouTubeVideoPlayer.Twitch
                 }
 
                 SetState(TwitchConnectionState.Connecting);
-                Logger.Log($"Connecting to Twitch chat #{_settings.Channel} as {login}...");
+                Logger.Log($"Connecting to Twitch chat #{_settings.VodChannel} as {login}...");
 
                 // Run outside the UI context; TwitchLib does not need it and must not block it.
                 // It reports a connection that could not be opened (no network, Twitch unreachable) with
@@ -214,7 +215,7 @@ namespace YouTubeVideoPlayer.Twitch
                     throw new InvalidOperationException("The connection to the Twitch chat server could not be opened.");
 
                 if (mustJoinChannel)
-                    await Task.Run(() => _client.JoinChannelAsync(_settings.Channel));
+                    await Task.Run(() => _client.JoinChannelAsync(_settings.VodChannel));
             }
             catch (Exception ex)
             {

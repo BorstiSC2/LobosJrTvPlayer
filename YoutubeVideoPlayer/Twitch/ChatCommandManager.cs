@@ -27,6 +27,12 @@ namespace YouTubeVideoPlayer.Twitch
         TimeSpan Cooldown { get; }
 
         /// <summary>
+        /// Commands with the same group share one cooldown timer: after one of them, none of them runs until the cooldown
+        /// is over. <c>null</c> or empty (the default; also what NSubstitute fakes return): the command has its own timer.
+        /// </summary>
+        string? CooldownGroup => null;
+
+        /// <summary>
         /// <c>true</c> if <c>!vodcommands</c> / <c>!modvodcommands</c> leave the command out: the ballots of a vote
         /// (<c>!vote</c>, <c>!skip</c>, <c>!stay</c>), which the vote itself names.
         /// </summary>
@@ -42,6 +48,9 @@ namespace YouTubeVideoPlayer.Twitch
     /// </summary>
     public sealed class ChatCommandManager : IDisposable
     {
+        /// <summary>The cooldown group of <c>!forceskip</c>, <c>!skipplaylist</c>, <c>!reload</c>, <c>!play</c> and <c>!pause</c>.</summary>
+        public const string PlaybackControlCooldownGroup = "playbackControl";
+
         private readonly IChatChannel _chat;
         private readonly HashSet<string> _privilegedUsers;
         private readonly Dictionary<string, IChatCommand> _commands = new(StringComparer.OrdinalIgnoreCase);
@@ -94,11 +103,18 @@ namespace YouTubeVideoPlayer.Twitch
 
             if (command.Cooldown > TimeSpan.Zero)
             {
+                var group = command.CooldownGroup;
+                var key = string.IsNullOrEmpty(group) ? command.Name : "group:" + group;
                 var now = _time.GetUtcNow();
-                if (_lastExecutionUtc.TryGetValue(command.Name, out var last) && now - last < command.Cooldown)
+                if (_lastExecutionUtc.TryGetValue(key, out var last) && now - last < command.Cooldown)
+                {
+                    // Only for a shared timer: a command blocked by another one would otherwise look like it was lost.
+                    if (!string.IsNullOrEmpty(group))
+                        Logger.Log($"Ignored !{command.Name} from {context.Username}: the shared '{group}' cooldown is running.");
                     return;
+                }
 
-                _lastExecutionUtc[command.Name] = now;
+                _lastExecutionUtc[key] = now;
                 Logger.Log($"Executing !{command.Name} for {context.Username}.");
             }
 

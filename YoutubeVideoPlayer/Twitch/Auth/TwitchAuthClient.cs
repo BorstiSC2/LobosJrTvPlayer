@@ -118,7 +118,8 @@ namespace YouTubeVideoPlayer.Twitch.Auth
                 (string?)json["login"] ?? string.Empty,
                 (string?)json["user_id"] ?? string.Empty,
                 TimeSpan.FromSeconds((int?)json["expires_in"] ?? 0),
-                ReadScopes(json["scopes"]));
+                ReadScopes(json["scopes"]),
+                (string?)json["client_id"] ?? string.Empty);
         }
 
         private async Task<(HttpStatusCode Status, JObject Json)> PostAsync(

@@ -9,7 +9,7 @@ namespace YouTubeVideoPlayer.Tests.TestSupport;
 /// </summary>
 public sealed class FakeHttpHandler : HttpMessageHandler
 {
-    public sealed record Request(HttpMethod Method, string Path, string Body, string? Authorization);
+    public sealed record Request(HttpMethod Method, string Path, string Body, string? Authorization, string Query = "", string? ClientId = null);
 
     public List<Request> Requests { get; } = new();
 
@@ -20,7 +20,8 @@ public sealed class FakeHttpHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content == null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        var recorded = new Request(request.Method, request.RequestUri!.AbsolutePath, body, request.Headers.Authorization?.ToString());
+        var recorded = new Request(request.Method, request.RequestUri!.AbsolutePath, body, request.Headers.Authorization?.ToString(),
+            request.RequestUri.Query, request.Headers.TryGetValues("Client-Id", out var ids) ? ids.FirstOrDefault() : null);
         Requests.Add(recorded);
 
         var (status, json) = Respond(recorded);

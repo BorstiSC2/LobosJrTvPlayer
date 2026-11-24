@@ -8,13 +8,22 @@ namespace YouTubeVideoPlayer.UI
     internal static class VoteTicker
     {
         /// <summary>
+        /// Whether the vote has all the ticker shows: its options are known. While a vote for a video still looks up its
+        /// options, the ticker is not shown (it would only say "Vote" and get its options a few seconds later). The time left
+        /// may follow later (the countdown starts after the options are posted); it is added at the end of the caption.
+        /// </summary>
+        public static bool IsComplete(VoteDisplay display) => display.Options.Count > 0;
+
+        /// <summary>
         /// A vote for a video: badge "Vote", the time left, the options with number, bar (their share of the votes) and
         /// count, the leader highlighted, and what to type. A skip vote: badge "Skip this video?", the video, <c>!skip</c>
-        /// and <c>!stay</c> with bars measured against the votes skipping needs.
+        /// and <c>!stay</c> with bars measured against the votes skipping needs. Only for a vote that
+        /// <see cref="IsComplete"/>.
         /// </summary>
         public static TickerContent From(VoteDisplay display)
         {
             var time = display.TimeLeft is { } left ? SkipVoteManager.FormatTimeLeft(left) : null;
+            var ending = display.Ending;
             var most = display.Options.Count == 0 ? 0 : display.Options.Max(o => o.Votes);
 
             if (display.Kind == VoteKind.Skip)
@@ -30,7 +39,7 @@ namespace YouTubeVideoPlayer.UI
                     .ToList();
                 var lead = display.Subject == null ? null : $"\"{display.Subject}\"";
                 return new TickerContent(OverlayStyle.SkipGlyph, "Skip this video?", time, lead, items,
-                    "Type " + string.Join(" or ", display.Options.Select(o => o.Command)));
+                    "Type " + string.Join(" or ", display.Options.Select(o => o.Command)), ending);
             }
 
             var total = display.Options.Sum(o => o.Votes);
@@ -46,7 +55,7 @@ namespace YouTubeVideoPlayer.UI
             if (display.Kind == VoteKind.VideoAfterCurrent)
                 hint += " for the video after this one";
 
-            return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, options, hint);
+            return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, options, hint, ending);
         }
     }
 }

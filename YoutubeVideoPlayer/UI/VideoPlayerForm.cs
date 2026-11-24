@@ -31,11 +31,15 @@ namespace YouTubeVideoPlayer.UI
         private readonly string _twitchBotName;
         private readonly AutoVoteManager? _autoVote;
         private readonly IReadOnlyList<IVoteDisplay> _voteDisplays;
+        private readonly NowPlayingSchedule _nowPlaying;
+        private readonly bool _ownsNowPlaying;
+        private readonly AvatarSet _avatars;
 
         private readonly VideoView _videoView;
         private readonly Panel _controlPanel;
         private readonly TitleStrip _titleStrip;
-        private readonly Label _volumeLabel;
+        private readonly NowPlayingCard _nowPlayingCard;
+        private readonly OverlayPill _volumeLabel;
         private readonly OverlayPill _bufferingLabel;
         private readonly OverlayPill _waitingLabel;
         private readonly OverlayPill _resumeLabel;
@@ -52,7 +56,17 @@ namespace YouTubeVideoPlayer.UI
         private readonly System.Windows.Forms.Timer _bufferingAnimationTimer;
         private readonly System.Windows.Forms.Timer _waitingCountdownTimer;
         private readonly System.Windows.Forms.Timer _voteTickerTimer;
+        private readonly System.Windows.Forms.Timer _nowPlayingTimer;
         private bool _showingWaiting;
+
+        // A vote runs (also one that still looks up its options and is not shown yet): it has the card's place.
+        private bool _voteRunning;
+
+        // What the strip at the bottom left should show. It is only handed to the strip once the card in the same place
+        // is gone, so the two never overlap (see ApplyStrip).
+        private string _statusText = string.Empty;
+        private AnimatedAvatar? _statusAvatar;
+        private TickerContent? _ticker;
         private bool _isBuffering;
         private bool _updatingVolumeSlider;
         private bool _playlistDialogOpen;
@@ -62,6 +76,7 @@ namespace YouTubeVideoPlayer.UI
         /// <param name="twitchBotName">The expected bot login from the settings (may be empty).</param>
         /// <param name="autoVote">Set when the Twitch bot is on; enables the "Autovote" checkbox.</param>
         /// <param name="voteDisplays">The chat votes whose options the ticker at the bottom shows while they run.</param>
+        /// <param name="nowPlaying">When the "now playing" card is due; without one the form makes its own.</param>
         public VideoPlayerForm(
             PlaybackManager playback,
             PlaylistManager playlists,
@@ -71,9 +86,14 @@ namespace YouTubeVideoPlayer.UI
             TwitchTokenManager? twitchTokens = null,
             string twitchBotName = "",
             AutoVoteManager? autoVote = null,
-            IReadOnlyList<IVoteDisplay>? voteDisplays = null)
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null,
+            NowPlayingSchedule? nowPlaying = null,
+            AvatarSet? avatars = null)
         {
             _autoVote = autoVote;
+            _avatars = avatars ?? AvatarSet.None;
+            _ownsNowPlaying = nowPlaying == null;
+            _nowPlaying = nowPlaying ?? new NowPlayingSchedule(playback);
             _voteDisplays = voteDisplays ?? Array.Empty<IVoteDisplay>();
             _playback = playback;
             _playlists = playlists;
@@ -96,15 +116,24 @@ namespace YouTubeVideoPlayer.UI
             _videoView = new VideoView { Dock = DockStyle.Fill, BackColor = Color.Black };
             Controls.Add(_videoView);
 
-            // The title, or during a chat vote a ticker with the options (cross-faded inside one strip).
+            // Now and then the video that plays: slides in at the bottom left, behind the strip.
+            _nowPlayingCard = new NowPlayingCard { NextAvatar = _avatars.NextCurrent };
+            Controls.Add(_nowPlayingCard);
+            _nowPlayingCard.BringToFront();
+
+            // Status texts ("Loading..."), or during a chat vote a ticker with the options (cross-faded inside one strip).
             _titleStrip = new TitleStrip();
             Controls.Add(_titleStrip);
             _titleStrip.BringToFront();
-            _volumeLabel = CreateOverlayLabel(100, 40, 10, ContentAlignment.MiddleCenter, AnchorStyles.Top | AnchorStyles.Right);
+            _volumeLabel = CreateOverlayPill("volume", OverlayStyle.VolumeGlyph, string.Empty, animated: false);
             // The labels in the middle of the video, in the style of the title strip.
             _bufferingLabel = CreateOverlayPill("buffering", OverlayStyle.BufferingGlyph, "Buffering", animated: true);
             _waitingLabel = CreateOverlayPill("waiting", OverlayStyle.WaitingGlyph, "Waiting for vote to finish...", animated: false);
             _resumeLabel = CreateOverlayPill("resume", OverlayStyle.ConnectionLostGlyph, "Connection lost - resuming", animated: true);
+            // The wolf that waits: buffering, waiting for a vote, a lost connection and a reload (the volume keeps its icon).
+            _bufferingLabel.Avatar = _avatars.Waiting;
+            _waitingLabel.Avatar = _avatars.Waiting;
+            _resumeLabel.Avatar = _avatars.Waiting;
 
             // While the next video waits for a vote, the time left counts down once a second.
             _waitingCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -113,6 +142,10 @@ namespace YouTubeVideoPlayer.UI
             // While a vote is shown, its time left counts down once a second.
             _voteTickerTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _voteTickerTimer.Tick += (_, __) => UpdateVoteTicker();
+
+            // While the card is up, its position and bar follow the video once a second.
+            _nowPlayingTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _nowPlayingTimer.Tick += (_, __) => UpdateNowPlayingContent();
 
             _volumeDisplayTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             _volumeDisplayTimer.Tick += (_, __) =>
@@ -250,6 +283,10 @@ namespace YouTubeVideoPlayer.UI
 
             foreach (var votes in _voteDisplays)
                 votes.DisplayChanged += OnVoteDisplayChanged;
+
+            _nowPlaying.Changed += OnNowPlayingScheduleChanged;
+            _nowPlayingCard.VisibleChanged += OnNowPlayingCardVisibleChanged;
+            _titleStrip.VisibleChanged += OnTitleStripVisibleChanged;
         }
 
         /// <summary>The Autovote was switched by a chat command: show it in the checkbox.</summary>
@@ -274,31 +311,15 @@ namespace YouTubeVideoPlayer.UI
             foreach (var votes in _voteDisplays)
                 votes.DisplayChanged -= OnVoteDisplayChanged;
 
+            _nowPlaying.Changed -= OnNowPlayingScheduleChanged;
+            _nowPlayingCard.VisibleChanged -= OnNowPlayingCardVisibleChanged;
+            _titleStrip.VisibleChanged -= OnTitleStripVisibleChanged;
+
             if (_twitch != null)
                 _twitch.StateChanged -= OnTwitchStateChanged;
         }
 
         #region Layout helpers
-
-        private Label CreateOverlayLabel(int width, int height, float fontSize, ContentAlignment alignment, AnchorStyles anchor)
-        {
-            var label = new Label
-            {
-                AutoSize = false,
-                Width = width,
-                Height = height,
-                BackColor = Color.FromArgb(200, 0, 0, 0),
-                ForeColor = Color.White,
-                TextAlign = alignment,
-                Padding = new Padding(0),
-                Visible = false,
-                Font = new Font(FontFamily.GenericSansSerif, fontSize, FontStyle.Bold),
-                Anchor = anchor
-            };
-            Controls.Add(label);
-            label.BringToFront();
-            return label;
-        }
 
         private Button AddControlButton(string text, EventHandler onClick)
         {
@@ -343,9 +364,15 @@ namespace YouTubeVideoPlayer.UI
         private void UpdateTitleLabelPosition()
         {
             // 10 px from the left and the bottom of the video; the strip sizes itself to its text (the ticker to all of it).
+            // The card sits in the same place, behind the strip; they are never up at the same time.
             var videoBounds = _videoView.Bounds;
-            _titleStrip.AvailableWidth = Math.Max(100, _videoView.ClientSize.Width - 20);
-            _titleStrip.BottomLeft = new Point(videoBounds.Left + 10, Math.Max(40, videoBounds.Bottom - 10));
+            var availableWidth = Math.Max(100, _videoView.ClientSize.Width - 20);
+            var bottomLeft = new Point(videoBounds.Left + 10, Math.Max(40, videoBounds.Bottom - 10));
+            _nowPlayingCard.AvailableWidth = availableWidth;
+            _nowPlayingCard.BottomLeft = bottomLeft;
+            _nowPlayingCard.BringToFront();
+            _titleStrip.AvailableWidth = availableWidth;
+            _titleStrip.BottomLeft = bottomLeft;
             _titleStrip.BringToFront();
         }
 
@@ -365,11 +392,91 @@ namespace YouTubeVideoPlayer.UI
             label.BringToFront();
         }
 
-        /// <summary>Shows a title (empty hides it). During a vote it is kept behind the ticker and comes back afterwards.</summary>
-        private void ShowTitle(string text)
+        /// <summary>
+        /// Shows a status text in the strip (empty hides it). During a vote it is kept behind the ticker and comes back
+        /// afterwards. The video's own title is on the "now playing" card instead.
+        /// </summary>
+        private void ShowTitle((string Text, AnimatedAvatar? Avatar) status) => ShowTitle(status.Text, status.Avatar);
+
+        private void ShowTitle(string text, AnimatedAvatar? avatar = null)
         {
-            _titleStrip.Title = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
+            _statusText = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
+            _statusAvatar = avatar;
             UpdateTitleLabelPosition();
+            UpdateNowPlayingCard();
+            ApplyStrip();
+        }
+
+        /// <summary>
+        /// The bottom left shows one thing at a time. The strip (a status text or a vote ticker) only gets its content once
+        /// the card is completely gone: a status text makes the card close at once, a vote waits until the card's time is
+        /// up. Called again when the card has disappeared.
+        /// </summary>
+        private void ApplyStrip()
+        {
+            if (IsDisposed || Disposing)
+                return;
+
+            if ((_ticker != null || _statusText.Length > 0) && _nowPlayingCard.Visible)
+                return;
+
+            _titleStrip.Title = _statusText;
+            _titleStrip.TitleAvatar = _statusAvatar;
+            _titleStrip.Ticker = _ticker;
+            if (_ticker != null)
+                _titleStrip.TickerAvatar = _avatars.ForVote(_ticker.Ending); // kept while the ticker fades out
+        }
+
+        private void OnNowPlayingCardVisibleChanged(object? sender, EventArgs e)
+        {
+            if (!_nowPlayingCard.Visible)
+                ApplyStrip();
+        }
+
+        private void OnTitleStripVisibleChanged(object? sender, EventArgs e)
+        {
+            if (!_titleStrip.Visible)
+                UpdateNowPlayingCard();
+        }
+
+        private void OnNowPlayingScheduleChanged(object? sender, EventArgs e) => UpdateNowPlayingCard();
+
+        /// <summary>
+        /// The card is up while it is due and a video is there to show. A status text takes its place at once. A vote that
+        /// starts while the card is up waits until the card's time is over (its ticker appears once the card is gone), and
+        /// no vote brings the card up (the schedule is <see cref="NowPlayingSchedule.Blocked"/> meanwhile). Otherwise the
+        /// card only appears once the strip in the same place is gone.
+        /// </summary>
+        private void UpdateNowPlayingCard()
+        {
+            if (IsDisposed || Disposing)
+                return;
+
+            bool show;
+            if (!_nowPlaying.IsShown || !_nowPlaying.CanShow || _statusText.Length > 0)
+                show = false;
+            else if (_voteRunning)
+                show = _nowPlayingCard.Showing;
+            else
+                show = _nowPlayingCard.Showing || !_titleStrip.Visible;
+            if (show)
+            {
+                UpdateNowPlayingContent();
+                _nowPlayingTimer.Start();
+            }
+            else
+            {
+                _nowPlayingTimer.Stop();
+            }
+
+            _nowPlayingCard.Showing = show;
+        }
+
+        /// <summary>The playing video, its position and length; kept while the card slides out.</summary>
+        private void UpdateNowPlayingContent()
+        {
+            if (_playback.Current is { } current)
+                _nowPlayingCard.Content = new NowPlayingCardContent(current.Title, _playback.Position, _playback.Length);
         }
 
         private void OnVoteDisplayChanged(object? sender, EventArgs e) => UpdateVoteTicker();
@@ -381,7 +488,17 @@ namespace YouTubeVideoPlayer.UI
         private void UpdateVoteTicker()
         {
             var display = _voteDisplays.Select(v => v.Display).FirstOrDefault(d => d != null);
-            _titleStrip.Ticker = display == null ? null : VoteTicker.From(display);
+            _voteRunning = display != null;
+            _nowPlaying.Blocked = _voteRunning;
+            if (display == null)
+                _ticker = null;
+            else if (VoteTicker.IsComplete(display))
+                _ticker = VoteTicker.From(display);
+            // Otherwise the vote is still looking up its options: it only shows once they are known. A ticker that is up
+            // (a won !voteskip that started this vote) stays until then, so the strip has no gap.
+
+            UpdateNowPlayingCard();
+            ApplyStrip();
 
             if (display == null)
                 _voteTickerTimer.Stop();
@@ -393,7 +510,7 @@ namespace YouTubeVideoPlayer.UI
 
         #region Manager events
 
-        private void OnLoadingStarted(object? sender, EventArgs e) => ShowTitle("Loading next video...");
+        private void OnLoadingStarted(object? sender, EventArgs e) => ShowTitle("Loading next video...", _avatars.Waiting);
 
         private void OnPlaybackStateChanged(object? sender, EventArgs e)
         {
@@ -401,7 +518,10 @@ namespace YouTubeVideoPlayer.UI
             UpdateWaitingDisplay();
             UpdateOverlayLabels();
             if (_playback.IsStandby)
-                ShowTitle(_playback.IsStandbyReady ? "Ready - press Play to start" : "Loading first video...");
+                ShowTitle(_playback.IsStandbyReady
+                    ? ("Ready - press Play to start", _avatars.Ok)
+                    : ("Loading first video...", _avatars.Waiting));
+            UpdateNowPlayingCard();
         }
 
         /// <summary>
@@ -445,9 +565,11 @@ namespace YouTubeVideoPlayer.UI
             return $"{seconds / 60}:{seconds % 60:00}";
         }
 
+        /// <summary>A new video: its title goes on the card (the schedule brings it up), the strip's status text goes.</summary>
         private void OnNowPlayingChanged(object? sender, NowPlaying nowPlaying)
         {
-            ShowTitle(nowPlaying.Title);
+            UpdateNowPlayingContent();
+            ShowTitle(string.Empty);
             UpdatePlayPauseButton();
         }
 
@@ -542,9 +664,10 @@ namespace YouTubeVideoPlayer.UI
             }
         }
 
-        private void ShowVolumeDisplay(string text)
+        private void ShowVolumeDisplay()
         {
-            _volumeLabel.Text = text;
+            _volumeLabel.Icon = _playback.IsMuted ? OverlayStyle.MuteGlyph : OverlayStyle.VolumeGlyph;
+            _volumeLabel.Text = _playback.IsMuted ? "Muted" : $"Volume {_playback.Volume}%";
             _volumeLabel.Location = new Point(ClientSize.Width - _volumeLabel.Width - 10, 10);
             _volumeLabel.Visible = true;
             _volumeLabel.BringToFront();
@@ -578,8 +701,8 @@ namespace YouTubeVideoPlayer.UI
             var signInHint = _twitch.UsesAppSignIn ? " – click here to sign in" : string.Empty;
             _twitchStatusLabel.Text = _twitch.State switch
             {
-                TwitchConnectionState.Connecting => $"Twitch: connecting to #{_twitch.Channel}...",
-                TwitchConnectionState.Connected => $"Twitch: connected to #{_twitch.Channel} as {_twitch.BotLogin}",
+                TwitchConnectionState.Connecting => $"Twitch: connecting to #{_twitch.VodChannel}...",
+                TwitchConnectionState.Connected => $"Twitch: connected to #{_twitch.VodChannel} as {_twitch.BotLogin}",
                 TwitchConnectionState.LoginFailed => _twitch.UsesAppSignIn
                     ? "Twitch: login failed" + signInHint
                     : "Twitch: login failed (check the token)",
@@ -669,16 +792,16 @@ namespace YouTubeVideoPlayer.UI
                 case Keys.Oemplus:
                 case Keys.Add:
                     _playback.AdjustVolume(VolumeStep);
-                    ShowVolumeDisplay($"Volume: {_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
                 case Keys.OemMinus:
                 case Keys.Subtract:
                     _playback.AdjustVolume(-VolumeStep);
-                    ShowVolumeDisplay($"Volume: {_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
                 case Keys.M:
                     _playback.ToggleMute();
-                    ShowVolumeDisplay(_playback.IsMuted ? "MUTE" : $"{_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
             }
         }
@@ -690,6 +813,9 @@ namespace YouTubeVideoPlayer.UI
             _bufferingAnimationTimer.Dispose();
             _waitingCountdownTimer.Dispose();
             _voteTickerTimer.Dispose();
+            _nowPlayingTimer.Dispose();
+            if (_ownsNowPlaying)
+                _nowPlaying.Dispose();
             _toolTip.Dispose();
             _videoView.MediaPlayer = null;
         }

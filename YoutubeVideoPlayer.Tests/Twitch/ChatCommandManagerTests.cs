@@ -8,12 +8,14 @@ namespace YouTubeVideoPlayer.Tests.Twitch;
 
 public class ChatCommandManagerTests
 {
-    private static IChatCommand Command(string name, bool moderatorOnly = false, TimeSpan? cooldown = null, string? reply = "ok")
+    private static IChatCommand Command(string name, bool moderatorOnly = false, TimeSpan? cooldown = null, string? reply = "ok",
+        string? group = null)
     {
         var command = Substitute.For<IChatCommand>();
         command.Name.Returns(name);
         command.RequiresModerator.Returns(moderatorOnly);
         command.Cooldown.Returns(cooldown ?? TimeSpan.Zero);
+        command.CooldownGroup.Returns(group);
         command.ExecuteAsync(Arg.Any<ChatCommandContext>()).Returns(reply);
         return command;
     }
@@ -141,6 +143,62 @@ public class ChatCommandManagerTests
 
         await skip.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
     });
+
+    [Fact]
+    public void CommandsOfOneCooldownGroup_ShareOneTimer() => UiContext.Run(async () =>
+    {
+        var chat = Chat.Channel(out _);
+        var time = new FakeTimeProvider();
+        var cooldown = TimeSpan.FromSeconds(3);
+        var skip = Command("forceskip", cooldown: cooldown, group: "playbackControl");
+        var pause = Command("pause", cooldown: cooldown, group: "playbackControl");
+        var current = Command("current", cooldown: cooldown);
+        using var manager = new ChatCommandManager(chat, new[] { skip, pause, current }, Array.Empty<string>(), time);
+
+        chat.Say("!forceskip", user: "mod1");
+        chat.Say("!pause", user: "mod2");     // blocked: the same group just ran
+        chat.Say("!current", user: "viewer"); // another timer
+        await Async.SettleAsync();
+
+        await skip.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
+        await pause.DidNotReceiveWithAnyArgs().ExecuteAsync(default!);
+        await current.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
+
+        time.Advance(cooldown);
+        chat.Say("!pause", user: "mod2");
+        await Async.SettleAsync();
+
+        await pause.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
+    });
+
+    [Fact]
+    public void AnEmptyCooldownGroup_MeansAnOwnTimer() => UiContext.Run(async () =>
+    {
+        var chat = Chat.Channel(out _);
+        var a = Command("a", cooldown: TimeSpan.FromMinutes(1), group: "");
+        var b = Command("b", cooldown: TimeSpan.FromMinutes(1), group: "");
+        using var manager = new ChatCommandManager(chat, new[] { a, b }, Array.Empty<string>(), new FakeTimeProvider());
+
+        chat.Say("!a");
+        chat.Say("!b");
+        await Async.SettleAsync();
+
+        await a.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
+        await b.Received(1).ExecuteAsync(Arg.Any<ChatCommandContext>());
+    });
+
+    [Fact]
+    public void TheCommandsThatChangeWhatPlays_ShareThePlaybackControlCooldown()
+    {
+        var grouped = typeof(IChatCommand).Assembly.GetTypes()
+            .Where(t => typeof(IChatCommand).IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
+            .Select(t => (IChatCommand)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(t))
+            .Where(c => c.CooldownGroup == ChatCommandManager.PlaybackControlCooldownGroup)
+            .Select(c => c.Name)
+            .OrderBy(n => n);
+
+        Assert.Equal(new[] { "forceskip", "pause", "play", "reload", "skipplaylist" }, grouped);
+    }
 
     [Fact]
     public void CommandsWithoutCooldown_RunEveryTime() => UiContext.Run(async () =>

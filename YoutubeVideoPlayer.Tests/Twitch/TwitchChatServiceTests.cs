@@ -17,12 +17,11 @@ public class TwitchChatServiceTests
 {
     private static readonly TwitchSettings ManualSettings = new()
     {
-        BotUsername = "lobosbot",
-        OAuthToken = "oauth:manual",
-        Channel = "lobosjr"
+        VodChannel = "lobosjr",
+        SignIn = { BotLogin = "lobosbot", OAuthToken = "oauth:manual" }
     };
 
-    private static readonly TwitchSettings AppSignInSettings = new() { ClientId = "cid", Channel = "lobosjr" };
+    private static readonly TwitchSettings AppSignInSettings = new() { VodChannel = "lobosjr", SignIn = { ClientId = "cid" } };
 
     /// <summary>A token manager whose auth client is a substitute, with an optional stored token.</summary>
     private sealed class Tokens : IDisposable
@@ -113,7 +112,7 @@ public class TwitchChatServiceTests
         await client.Received(1).ConnectAsync();
         Assert.False(chat.UsesAppSignIn);
         Assert.Equal("lobosbot", chat.BotLogin);
-        Assert.Equal("lobosjr", chat.Channel);
+        Assert.Equal("lobosjr", chat.VodChannel);
         Assert.Equal(TwitchConnectionState.Connecting, chat.State);
 
         Joined(client);
@@ -229,7 +228,7 @@ public class TwitchChatServiceTests
     public void RejectedCredentials_AreNotTriedAgain() => UiContext.Run(async () =>
     {
         // TwitchLib refuses a login name this short, and will refuse it again: retrying would only fill the log.
-        var settings = new TwitchSettings { BotUsername = "ab", OAuthToken = "oauth:x", Channel = "lobosjr" };
+        var settings = new TwitchSettings { VodChannel = "lobosjr", SignIn = { BotLogin = "ab", OAuthToken = "oauth:x" } };
         var time = new FakeTimeProvider();
         var client = Chat.Client();
         var chat = new TwitchChatService(settings, null, client, time);

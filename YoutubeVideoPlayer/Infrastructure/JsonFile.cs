@@ -47,6 +47,13 @@ namespace YouTubeVideoPlayer.Infrastructure
             }
         }
 
+        /// <summary>
+        /// The text of <paramref name="path"/>, with the same retries as <see cref="Read{T}"/>; <c>null</c> if the file
+        /// does not exist. For callers that look at the JSON before deserializing it (e.g. to migrate it).
+        /// </summary>
+        public static string? ReadText(string path) =>
+            File.Exists(path) ? ReadAllText(path, Thread.Sleep) : null;
+
         private const int ReadAttempts = 3;
         private static readonly TimeSpan ReadRetryDelay = TimeSpan.FromMilliseconds(100);
 

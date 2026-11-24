@@ -7,16 +7,19 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 {
     /// <summary>
     /// <c>!current</c>: posts the title of the video that is playing, its position (with the length and the
-    /// time left, if the length is known) and a link to it on YouTube.
+    /// time left, if the length is known) and a link to it on YouTube, and brings up the "now playing" card on stream.
     /// </summary>
     public sealed class CurrentCommand : IChatCommand
     {
         private readonly IPlaybackControl _playback;
+        private readonly Action? _showOnStream;
 
-        public CurrentCommand(IPlaybackControl playback, TimeSpan cooldown)
+        /// <param name="showOnStream">Shows the video on stream too (the "now playing" card); called with every answer about a video.</param>
+        public CurrentCommand(IPlaybackControl playback, TimeSpan cooldown, Action? showOnStream = null)
         {
             _playback = playback;
             Cooldown = cooldown;
+            _showOnStream = showOnStream;
         }
 
         public string Name => "current";
@@ -36,6 +39,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
             var title = string.IsNullOrWhiteSpace(current.Title) ? "The current video" : $"\"{current.Title}\"";
             var url = YouTubeService.ToUrl(current.VideoId);
+            _showOnStream?.Invoke();
 
             return Task.FromResult<string?>($"Now playing: {title} – {DescribePosition()} – {url}");
         }

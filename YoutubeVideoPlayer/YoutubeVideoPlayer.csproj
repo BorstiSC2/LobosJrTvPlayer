@@ -8,10 +8,12 @@
 	<AssemblyName>YouTubeVideoPlayer</AssemblyName>
 	<RootNamespace>YouTubeVideoPlayer</RootNamespace>
 	<Platforms>AnyCPU;x64</Platforms>
-	<AssemblyVersion>2.2.0</AssemblyVersion>
-	<FileVersion>2.2.0</FileVersion>
+	<AssemblyVersion>2.3.0</AssemblyVersion>
+	<FileVersion>2.3.0</FileVersion>
 	<InformationalVersion>2.1.0</InformationalVersion>
 	<ApplicationIcon>LobosJrTvTwitchIcon.ico</ApplicationIcon>
+	<!-- Declares Windows 8 to 11: needed for the layered child window of the "now playing" card. -->
+	<ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
@@ -43,6 +45,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="twitchsettings.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- The wolf avatars of the overlays (AvatarSet), next to the exe so another picture needs no rebuild. -->
+    <None Include="..\LobosResources\*.gif;..\LobosResources\*.png" Link="LobosResources\%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <!-- Bot credentials stay local (gitignored); copied only if the file exists. -->

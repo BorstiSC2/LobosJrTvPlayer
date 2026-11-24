@@ -31,6 +31,15 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// <summary>How long posting the rules and all options takes; the countdown starts after that.</summary>
         public static TimeSpan AnnouncementDuration => MessageDelay * OptionCount;
 
+        /// <summary>The length of a revote if none is set (<c>revote.durationSeconds</c>).</summary>
+        public static readonly TimeSpan DefaultRevoteDuration = TimeSpan.FromSeconds(45);
+
+        /// <summary>
+        /// How many revotes may follow one another: when the winners of all of them fail too, the regular next video stays
+        /// (YouTube is probably having trouble, and more votes would only fill the chat).
+        /// </summary>
+        public const int MaxRevotes = 2;
+
         private const int MaxTitleLength = 70;
         private static readonly TimeSpan TitleLookupTimeout = TimeSpan.FromSeconds(10);
 
@@ -43,6 +52,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private readonly TimeProvider _time;
         private readonly Random _random;
         private VoteSession? _session;
+        private HandedOverWinner? _winner;
+        private bool _disposed;
 
         /// <param name="random">Source for random tie-breaks; a new <see cref="Random"/> by default.</param>
         public SkipVoteManager(
@@ -63,20 +74,35 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             _optionCount = optionCount;
             _time = timeProvider ?? TimeProvider.System;
             _random = random ?? new Random();
+            _playback.RequestedVideoFailed += OnRequestedVideoFailed;
         }
+
+        /// <summary>
+        /// The countdown of a revote: the vote that runs again when a winner could not be played (the regular next video
+        /// plays meanwhile, and the revote's winner replaces it at once).
+        /// </summary>
+        public TimeSpan RevoteDuration { get; init; } = DefaultRevoteDuration;
 
         public bool IsRunning => _session != null;
 
         public event EventHandler? DisplayChanged;
 
-        /// <summary>The running vote for the vote ticker, once its options are known; <c>null</c> otherwise.</summary>
+        /// <summary>
+        /// The running vote for the vote ticker; <c>null</c> without one. While the options are still being looked up it has
+        /// no options and no time (the ticker says the videos are being picked), so a vote shows from its start: a won
+        /// <c>!voteskip</c> hands over to it without a gap.
+        /// </summary>
         public VoteDisplay? Display
         {
             get
             {
                 var session = _session;
-                if (session == null || session.Options.Count == 0)
+                if (session == null)
                     return null;
+
+                var kind = session.AfterCurrent ? VoteKind.VideoAfterCurrent : VoteKind.NextVideo;
+                if (session.Options.Count == 0)
+                    return new VoteDisplay(kind, Array.Empty<VoteDisplayOption>(), null);
 
                 var counts = new int[session.Options.Count];
                 foreach (var choice in session.Votes.Values)
@@ -86,15 +112,28 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                     .Select((o, i) => new VoteDisplayOption($"{i + 1}", Shorten(o.Title), $"!vote {i + 1}", counts[i]))
                     .ToList();
                 TimeSpan? left = session.EndsAt is { } endsAt ? Max(TimeSpan.Zero, endsAt - _time.GetUtcNow()) : null;
-                return new VoteDisplay(session.AfterCurrent ? VoteKind.VideoAfterCurrent : VoteKind.NextVideo, options, left);
+                return new VoteDisplay(kind, options, left, Ending: IsEnding(session.Warned, session.Duration, left));
             }
         }
 
         private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
+        /// <summary>Votes of at least this length get a warning halfway through ("1 minute left! ...").</summary>
+        internal static readonly TimeSpan WarningFrom = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// Whether a vote is in its last part (<see cref="VoteDisplay.Ending"/>): once its warning has been posted, or, for a
+        /// vote too short for one, from halfway on.
+        /// </summary>
+        internal static bool IsEnding(bool warned, TimeSpan duration, TimeSpan? left) =>
+            warned || (duration < WarningFrom && left is { } remaining && remaining <= duration / 2);
+
         private void OnDisplayChanged() => DisplayChanged?.Invoke(this, EventArgs.Empty);
 
-        /// <summary>The standard length of a vote (the countdown after the last option has been posted).</summary>
+        /// <summary>
+        /// The length of a vote started by a moderator (<c>!forcevoteskip</c>): the countdown after the last option has been
+        /// posted. The autovote and the vote after a won <c>!voteskip</c> pass their own.
+        /// </summary>
         public TimeSpan Duration => _duration;
 
         /// <summary>
@@ -105,8 +144,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         /// <inheritdoc cref="StartAsync(ChatCommandContext)"/>
         /// <param name="startedBy">Who started the vote, for the log (e.g. <c>!voteskip</c>).</param>
-        public Task<string?> StartAsync(string startedBy) =>
-            StartCoreAsync(startedBy, afterCurrent: false, _duration);
+        /// <param name="duration">Length of the countdown; <see cref="Duration"/> by default.</param>
+        public Task<string?> StartAsync(string startedBy, TimeSpan? duration = null) =>
+            StartCoreAsync(startedBy, afterCurrent: false, duration ?? _duration);
 
         /// <summary>
         /// What <c>!voteinfo</c> says about the running vote: its options and the time left; <c>null</c> without a vote.
@@ -152,8 +192,10 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         public Task<string?> StartAfterCurrentAsync(TimeSpan duration, DateTimeOffset? mustEndBy = null, bool holdNextVideo = false) =>
             StartCoreAsync("the autovote", afterCurrent: true, duration, mustEndBy, holdNextVideo);
 
+        /// <param name="revote">Set for the vote that repeats one whose winner could not be played.</param>
         private async Task<string?> StartCoreAsync(
-            string startedBy, bool afterCurrent, TimeSpan duration, DateTimeOffset? mustEndBy = null, bool holdNextVideo = false)
+            string startedBy, bool afterCurrent, TimeSpan duration, DateTimeOffset? mustEndBy = null, bool holdNextVideo = false,
+            HandedOverWinner? revote = null)
         {
             if (_session != null)
             {
@@ -162,8 +204,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                     : "A vote is already being prepared.";
             }
 
-            var session = new VoteSession(duration, afterCurrent, _playback.Current);
+            var session = new VoteSession(duration, afterCurrent, _playback.Current) { FailedWinner = revote };
             _session = session;
+            OnDisplayChanged(); // "being prepared"
             Logger.Log($"Skip vote started by {startedBy}{(afterCurrent ? " (for the video after the current one)" : string.Empty)}.");
 
             // At once, not after the option lookup: a short video may end while the options are being looked up.
@@ -173,7 +216,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             List<VoteOption> options;
             try
             {
-                options = await PickOptionsAsync(session.Cancellation.Token);
+                options = await PickOptionsAsync(revote?.VideoId, session.Cancellation.Token);
             }
             catch (OperationCanceledException)
             {
@@ -292,11 +335,13 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             OnDisplayChanged();
 
-            // Remind the chat halfway through longer votes.
-            var reminderAt = session.Duration >= TimeSpan.FromSeconds(60) ? session.Duration / 2 : TimeSpan.Zero;
+            // Remind the chat halfway through longer votes; the ticker shows the vote is ending from the same moment.
+            var reminderAt = session.Duration >= WarningFrom ? session.Duration / 2 : TimeSpan.Zero;
             if (reminderAt > TimeSpan.Zero)
             {
                 await Task.Delay(reminderAt, _time, token);
+                session.Warned = true;
+                OnDisplayChanged();
                 await TrySendAsync($"{FormatDuration(session.Duration - reminderAt)} left! {FormatStandings(session)} – vote with {range}.");
             }
 
@@ -313,6 +358,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 EndSession(session);
                 var (winner, message) = DetermineWinner(session);
                 Logger.Log($"Skip vote finished: {message}");
+
+                // Before the hand-over: playback reports a failure of the winner while it is still being handed over.
+                _winner = new HandedOverWinner(winner.VideoId, winner.Title, (session.FailedWinner?.Revotes ?? -1) + 1);
                 await TrySendAsync(message);
 
                 if (session.AfterCurrent)
@@ -329,6 +377,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// <summary>The first words of the rules message; they say which video the vote is about.</summary>
         private static string Headline(VoteSession session)
         {
+            if (session.FailedWinner is { } failed)
+                return $"\"{Shorten(failed.Title)}\" could not be played – vote again for the next video!";
+
             if (!session.AfterCurrent)
                 return "Vote for the next video!";
 
@@ -381,12 +432,15 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             return (winner, $"Voting ended: \"{Shorten(winner.Title)}\" wins with {best} of {Votes(totalVotes)}! {PlaysText(session)}");
         }
 
-        private async Task<List<VoteOption>> PickOptionsAsync(CancellationToken cancellationToken)
+        /// <param name="exclude">A video that must not be offered (the winner that could not be played), or <c>null</c>.</param>
+        private async Task<List<VoteOption>> PickOptionsAsync(string? exclude, CancellationToken cancellationToken)
         {
             // The videos that could follow the current one, never the current one itself: random ones if the
             // playlist is shuffled, otherwise the next episodes in order. Ask for spares in case some of them
             // are unavailable; they come in the same order, so the options stay the next ones in line.
-            var candidates = _videos.GetNextVideoIds(_optionCount * 3, _playback.Current?.VideoId);
+            var candidates = _videos.GetNextVideoIds(_optionCount * 3, _playback.Current?.VideoId)
+                .Where(id => id != exclude)
+                .ToList();
             var options = new List<VoteOption>();
 
             // A batch only asks for the options that are still missing, so the next one starts right after the
@@ -458,7 +512,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// </param>
         private void EndSession(VoteSession session, bool releaseHold = true)
         {
-            var wasShown = ReferenceEquals(_session, session) && session.Options.Count > 0;
+            var wasShown = ReferenceEquals(_session, session);
             if (ReferenceEquals(_session, session))
                 _session = null;
 
@@ -473,13 +527,62 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 OnDisplayChanged();
         }
 
+        /// <summary>
+        /// The winner of the last vote could not be played, and the regular next video plays instead: the chat votes again,
+        /// shorter (<see cref="RevoteDuration"/>), without the failed video, and the new winner plays at once. Up to
+        /// <see cref="MaxRevotes"/> times in a row; not while another vote runs or the chat is not connected.
+        /// </summary>
+        private void OnRequestedVideoFailed(object? sender, string videoId)
+        {
+            var winner = _winner;
+            if (_disposed || winner == null || winner.VideoId != videoId)
+                return; // not a winner of this manager's votes
+
+            _winner = null;
+            if (winner.Revotes >= MaxRevotes)
+            {
+                Logger.Log($"The winner \"{winner.Title}\" could not be played either; no more revotes, the next video plays.");
+                return;
+            }
+
+            if (_session != null)
+            {
+                Logger.Log($"The winner \"{winner.Title}\" could not be played; another vote runs, so there is no revote.");
+                return;
+            }
+
+            if (!_chat.IsConnected)
+            {
+                Logger.Log($"The winner \"{winner.Title}\" could not be played; the chat is not connected, so there is no revote.");
+                return;
+            }
+
+            Logger.Log($"The winner \"{winner.Title}\" ({videoId}) could not be played; the chat votes again.");
+            RevoteAsync(winner).FireAndForget("The revote failed.");
+        }
+
+        private async Task RevoteAsync(HandedOverWinner failed)
+        {
+            var reply = await StartCoreAsync("a failed winner", afterCurrent: false, RevoteDuration, revote: failed);
+            if (reply != null)
+                Logger.Log($"The revote did not start: {reply}");
+        }
+
         public void Dispose()
         {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _playback.RequestedVideoFailed -= OnRequestedVideoFailed;
             if (_session != null)
                 EndSession(_session, releaseHold: false);
         }
 
         private sealed record VoteOption(string VideoId, string Title);
+
+        /// <summary>A winner that was handed to playback, and how many revotes came before it (0 for a regular vote).</summary>
+        private sealed record HandedOverWinner(string VideoId, string Title, int Revotes);
 
         private sealed class VoteSession
         {
@@ -493,6 +596,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             /// <summary>The countdown after the last option has been posted (shortened if the options took long to find).</summary>
             public TimeSpan Duration { get; set; }
 
+            /// <summary>The warning halfway through has been posted.</summary>
+            public bool Warned { get; set; }
+
             /// <summary>When the countdown ends; <c>null</c> until it has started (the options are still being posted).</summary>
             public DateTimeOffset? EndsAt { get; set; }
 
@@ -504,6 +610,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             /// <summary>Keeps the next video waiting until the vote is over; <c>null</c> once released (or if there is none).</summary>
             public IPlaybackHold? Hold { get; set; }
+
+            /// <summary>For a revote: the winner that could not be played; <c>null</c> for a regular vote.</summary>
+            public HandedOverWinner? FailedWinner { get; init; }
 
             public CancellationTokenSource Cancellation { get; } = new();
 

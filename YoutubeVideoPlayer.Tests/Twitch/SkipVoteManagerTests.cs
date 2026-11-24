@@ -603,6 +603,43 @@ public class SkipVoteManagerTests
     });
 
     [Fact]
+    public void TheVoteIsEnding_FromTheMomentItsWarningIsPosted() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var warned = new List<bool>();
+        setup.Manager.DisplayChanged += (_, _) => warned.Add(setup.Sent.Any(m => m.Contains("left!")));
+        await setup.StartAsync();
+        await setup.AnnounceAsync();
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromMinutes(1) - TimeSpan.FromSeconds(1));
+        await Async.SettleAsync();
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(1)); // halfway: "1 minute left! ..."
+        await Async.SettleAsync();
+
+        Assert.True(setup.Manager.Display!.Ending);
+        Assert.Contains(setup.Sent, m => m.StartsWith("1 minute left!"));
+        Assert.Contains(false, warned); // a display change for the warning itself: the ticker switches with it
+    });
+
+    [Fact]
+    public void AVoteTooShortForAWarning_IsEndingFromHalfway() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(duration: TimeSpan.FromSeconds(40));
+        await setup.StartAsync();
+        await setup.AnnounceAsync();
+
+        setup.Time.Advance(TimeSpan.FromSeconds(19));
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(setup.Manager.Display!.Ending);
+        Assert.DoesNotContain(setup.Sent, m => m.Contains("left!"));
+    });
+
+    [Fact]
     public void HalfwayReminder_WithoutVotes() => UiContext.Run(async () =>
     {
         using var setup = new Setup(duration: TimeSpan.FromMinutes(6));
@@ -793,10 +830,234 @@ public class SkipVoteManagerTests
 
     #endregion
 
+    #region Revote when the winner could not be played
+
+    /// <summary>The videos handed to <see cref="IPlaybackControl.PlayVideoAsync"/>, in order.</summary>
+    private static List<string> PlayedVideos(Setup setup) => setup.Playback.ReceivedCalls()
+        .Where(c => c.GetMethodInfo().Name == nameof(IPlaybackControl.PlayVideoAsync))
+        .Select(c => (string)c.GetArguments()[0]!)
+        .ToList();
+
+    /// <summary>
+    /// Playback reports <paramref name="failedWinner"/> as failed while <paramref name="playingInstead"/> plays; if a revote
+    /// starts, it is announced and runs to its end (with <paramref name="vote"/> as the only ballot). Returns what it posted.
+    /// </summary>
+    private static async Task<List<string>> FailAsync(Setup setup, string failedWinner, string playingInstead = "fallback", string? vote = null)
+    {
+        var before = setup.Sent.Count;
+        setup.Playback.Current.Returns(new NowPlaying(playingInstead, "Title " + playingInstead, null));
+        setup.Playback.RequestedVideoFailed += Raise.Event<EventHandler<string>>(setup.Playback, failedWinner);
+        await Async.SettleAsync();
+        if (!setup.Manager.IsRunning)
+            return setup.Sent.Skip(before).ToList();
+
+        // The options are looked up on the thread pool; the rules message follows once they are known.
+        await Async.WaitUntilAsync(() => setup.Sent.Count > before, because: "the revote is announced");
+        for (var i = 0; i < SkipVoteManager.OptionCount; i++)
+        {
+            setup.Time.Advance(SkipVoteManager.MessageDelay);
+            await Async.SettleAsync();
+        }
+
+        if (vote != null)
+            setup.Vote("voter", vote);
+
+        setup.Time.Advance(setup.Manager.RevoteDuration);
+        await Async.SettleAsync();
+        return setup.Sent.Skip(before).ToList();
+    }
+
+    [Fact]
+    public void AWinnerThatCouldNotBePlayed_IsVotedOnAgain_ShorterAndWithoutIt_AndTheNewWinnerPlaysAtOnce() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+        Assert.Equal(new[] { "b" }, PlayedVideos(setup));
+
+        var sent = await FailAsync(setup, "b", vote: "1");
+
+        Assert.Equal(SkipVoteManager.DefaultRevoteDuration, setup.Manager.RevoteDuration);
+        setup.Videos.Received(1).GetNextVideoIds(9, "fallback"); // what follows the video that plays instead
+        Assert.Equal(
+            new[]
+            {
+                $"\"Title b\" could not be played {Dash} vote again for the next video! Pick one of the 3 options below by typing its command {Dash} " +
+                "you can change your vote at any time. Voting ends 45 seconds after the last option.",
+                $"1) Title a {Dash} vote with !vote 1",
+                $"2) Title c {Dash} vote with !vote 2", // never the failed winner
+                $"3) Title d {Dash} vote with !vote 3",
+                "Voting ended: \"Title a\" wins with 1 of 1 vote! Playing it now."
+            },
+            sent);
+        Assert.Equal(new[] { "b", "a" }, PlayedVideos(setup));
+        Assert.False(setup.Manager.IsRunning);
+    });
+
+    [Fact]
+    public void AFailedWinnerOfTheVoteForTheVideoAfterTheCurrentOne_IsVotedOnAgain_AndTheNewWinnerPlaysAtOnce() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromSeconds(45));
+        setup.Vote("anna", "3");
+        await setup.FinishAsync(TimeSpan.FromSeconds(45));
+        Assert.Equal("c", setup.QueuedVideo());
+
+        var sent = await FailAsync(setup, "c", vote: "2");
+
+        Assert.StartsWith($"\"Title c\" could not be played {Dash} vote again for the next video!", sent[0]);
+        Assert.Equal("Voting ended: \"Title b\" wins with 1 of 1 vote! Playing it now.", sent.Last());
+        Assert.Equal(new[] { "b" }, PlayedVideos(setup)); // played at once: the video after the current one is long over
+    });
+
+    [Fact]
+    public void TheRevoteUsesItsOwnDuration() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var manager = new SkipVoteManager(setup.Chat, setup.Playback, setup.Videos, setup.YouTube, TimeSpan.FromMinutes(2),
+            SkipVoteManager.OptionCount, setup.Time, new Random(1)) { RevoteDuration = TimeSpan.FromSeconds(20) };
+        using (manager)
+        {
+            await manager.StartAsync("test");
+            await setup.FinishAsync();
+            var winner = PlayedVideos(setup).Single();
+
+            var before = setup.Sent.Count;
+            setup.Playback.RequestedVideoFailed += Raise.Event<EventHandler<string>>(setup.Playback, winner);
+            await Async.WaitUntilAsync(() => setup.Sent.Count > before);
+
+            Assert.EndsWith("Voting ends 20 seconds after the last option.", setup.Sent[before]);
+        }
+    });
+
+    [Fact]
+    public void Revotes_StopAfterMaxRevotesInARow_ThenTheNextVideoStays() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        await setup.FinishAsync();
+
+        for (var revote = 1; revote <= SkipVoteManager.MaxRevotes; revote++)
+        {
+            await FailAsync(setup, PlayedVideos(setup).Last());
+            Assert.Equal(revote + 1, PlayedVideos(setup).Count);
+        }
+
+        var sent = await FailAsync(setup, PlayedVideos(setup).Last());
+
+        Assert.Empty(sent);
+        Assert.False(setup.Manager.IsRunning);
+        Assert.Equal(SkipVoteManager.MaxRevotes + 1, PlayedVideos(setup).Count);
+    });
+
+    [Fact]
+    public void ANewRegularVote_StartsTheRevoteCountOver() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        for (var round = 0; round < 2; round++)
+        {
+            Assert.Null(await setup.Manager.StartAsync("test"));
+            await Async.SettleAsync();
+            for (var i = 0; i < SkipVoteManager.OptionCount; i++)
+            {
+                setup.Time.Advance(SkipVoteManager.MessageDelay);
+                await Async.SettleAsync();
+            }
+
+            setup.Time.Advance(setup.Manager.Duration / 2); // the halfway reminder
+            await Async.SettleAsync();
+            setup.Time.Advance(setup.Manager.Duration / 2);
+            await Async.SettleAsync();
+            Assert.False(setup.Manager.IsRunning);
+
+            for (var revote = 0; revote < SkipVoteManager.MaxRevotes; revote++)
+                await FailAsync(setup, PlayedVideos(setup).Last());
+        }
+
+        Assert.Equal(2 * (1 + SkipVoteManager.MaxRevotes), PlayedVideos(setup).Count);
+    });
+
+    [Fact]
+    public void AFailureOfAVideoThatDidNotWinAVote_StartsNoRevote() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+
+        Assert.Empty(await FailAsync(setup, "a"));
+        Assert.False(setup.Manager.IsRunning);
+    });
+
+    [Fact]
+    public void AWinnerFailsOnlyOnce_ASecondReportStartsNoSecondRevote() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+        await FailAsync(setup, "b");
+        var played = PlayedVideos(setup).Count;
+
+        Assert.Empty(await FailAsync(setup, "b"));
+        Assert.Equal(played, PlayedVideos(setup).Count);
+    });
+
+    [Fact]
+    public void NoRevote_WhileTheChatIsNotConnected() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+        setup.Chat.IsConnected.Returns(false);
+
+        await FailAsync(setup, "b");
+
+        Assert.False(setup.Manager.IsRunning);
+        Assert.Equal(new[] { "b" }, PlayedVideos(setup));
+    });
+
+    [Fact]
+    public void NoRevote_WhileAnotherVoteRuns() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+        Assert.Null(await setup.Manager.StartAfterCurrentAsync(TimeSpan.FromSeconds(45)));
+
+        setup.Playback.RequestedVideoFailed += Raise.Event<EventHandler<string>>(setup.Playback, "b");
+        await Async.SettleAsync();
+
+        Assert.True(setup.Manager.IsRunning); // the other vote, which picks the next video anyway
+        Assert.Equal(VoteKind.VideoAfterCurrent, setup.Manager.Display!.Kind);
+        Assert.DoesNotContain(setup.Sent, m => m.Contains("could not be played"));
+    });
+
+    [Fact]
+    public void AfterDispose_AFailedWinnerStartsNoRevote() => UiContext.Run(async () =>
+    {
+        var setup = new Setup();
+        await setup.StartAsync();
+        setup.Vote("anna", "2");
+        await setup.FinishAsync();
+        setup.Dispose();
+
+        setup.Playback.RequestedVideoFailed += Raise.Event<EventHandler<string>>(setup.Playback, "b");
+        await Async.SettleAsync();
+
+        Assert.False(setup.Manager.IsRunning);
+        Assert.DoesNotContain(setup.Sent, m => m.Contains("could not be played"));
+    });
+
+    #endregion
+
     #region Display for the vote ticker
 
     [Fact]
-    public void Display_IsNull_UntilTheOptionsAreKnown_ThenShowsThemWithoutTime() => UiContext.Run(async () =>
+    public void Display_ShowsTheVoteBeingPrepared_UntilTheOptionsAreKnown_ThenShowsThemWithoutTime() => UiContext.Run(async () =>
     {
         using var setup = new Setup();
         var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
@@ -807,14 +1068,17 @@ public class SkipVoteManagerTests
         var start = setup.Manager.StartAsync(TestSupport.Chat.Command("!forcevoteskip", user: "mod"));
         await Async.SettleAsync();
         Assert.True(setup.Manager.IsRunning);
-        Assert.Null(setup.Manager.Display);
-        Assert.Equal(0, changes);
+        var preparing = setup.Manager.Display!;
+        Assert.Equal(1, changes); // shown from the start: a won !voteskip hands over without a gap
+        Assert.Equal(VoteKind.NextVideo, preparing.Kind);
+        Assert.Empty(preparing.Options);
+        Assert.Null(preparing.TimeLeft);
 
         lookup.SetResult(new YouTubeVideoDetails("Same title", null));
         await start;
 
         var display = setup.Manager.Display!;
-        Assert.Equal(1, changes);
+        Assert.Equal(2, changes);
         Assert.Equal(VoteKind.NextVideo, display.Kind);
         Assert.Equal(
             new (string?, string, string, int)[] { ("1", "Same title", "!vote 1", 0), ("2", "Same title", "!vote 2", 0), ("3", "Same title", "!vote 3", 0) },
@@ -886,6 +1150,22 @@ public class SkipVoteManagerTests
             setup.Manager.Dispose();
             Assert.Null(setup.Manager.Display);
         }
+    });
+
+    [Fact]
+    public void Display_IsGone_WhenTheVoteCannotStartAfterAll() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Videos.GetNextVideoIds(Arg.Any<int>(), Arg.Any<string?>()).Returns(new List<string> { "only-one" });
+        var displays = new List<VoteDisplay?>();
+        setup.Manager.DisplayChanged += (_, _) => displays.Add(setup.Manager.Display);
+
+        Assert.NotNull(await setup.Manager.StartAsync(TestSupport.Chat.Command("!forcevoteskip", user: "mod")));
+
+        Assert.Equal(2, displays.Count); // being prepared, then gone
+        Assert.Empty(displays[0]!.Options);
+        Assert.Null(displays[1]);
+        Assert.Null(setup.Manager.Display);
     });
 
     [Fact]

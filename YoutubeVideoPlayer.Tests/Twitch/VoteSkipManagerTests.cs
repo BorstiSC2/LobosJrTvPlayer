@@ -46,7 +46,17 @@ public class VoteSkipManagerTests
 
         public SkipVoteManager Votes { get; }
 
-        public VoteSkipManager VoteSkip { get; }
+        public VoteSkipManager VoteSkip { get; private set; }
+
+        /// <summary>Gives the vote for the next video after a won vote-skip its own length.</summary>
+        public void UseNextVideoVoteDuration(TimeSpan duration)
+        {
+            VoteSkip.Dispose();
+            VoteSkip = new VoteSkipManager(Chat, Playback, Votes, () => Average, Duration, Cooldown, 75, Time)
+            {
+                NextVideoVoteDuration = duration
+            };
+        }
 
         /// <summary>The rolling average of unique chatters the manager sees.</summary>
         public double Average { get; set; } = 4; // 75 % → 3 votes
@@ -193,6 +203,80 @@ public class VoteSkipManagerTests
     });
 
     [Fact]
+    public void SkipWins_TheTickerHandsOverToTheVoteForTheNextVideo_WithoutAGap() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Average = 1;
+        var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
+        setup.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+        var shown = new List<VoteKind?>();
+        void Record(object? sender, EventArgs e) => shown.Add((setup.VoteSkip.Display ?? setup.Votes.Display)?.Kind);
+        setup.VoteSkip.DisplayChanged += Record;
+        setup.Votes.DisplayChanged += Record;
+        setup.Start();
+        setup.Stay("b");
+        setup.Skip("c");
+
+        await setup.FinishAsync();
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning);
+
+        // The skip vote is gone, the vote for the next video shows while its options are looked up.
+        Assert.False(setup.VoteSkip.IsRunning);
+        Assert.Null(setup.VoteSkip.Display);
+        Assert.Empty(setup.Votes.Display!.Options);
+
+        lookup.SetResult(new YouTubeVideoDetails("Title", null));
+        await Async.WaitUntilAsync(() => setup.Votes.Display!.Options.Count > 0);
+
+        Assert.DoesNotContain(null, shown); // never nothing in between
+        Assert.Equal(VoteKind.Skip, shown.First());
+        Assert.Equal(VoteKind.NextVideo, shown.Last());
+    });
+
+    [Fact]
+    public void WhileTheResultIsPosted_BallotsAndAVideoChange_DoNotStopTheVoteForTheNextVideo() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Average = 1;
+        var send = new TaskCompletionSource();
+        setup.Chat.SendMessageAsync(Arg.Is<string>(m => m.StartsWith("The chat voted to skip"))).Returns(send.Task);
+        setup.Start();
+        await setup.FinishAsync(); // the starter's !skip wins
+
+        // The result is being posted: the decided vote stays (and on the ticker) until the next vote shows.
+        Assert.True(setup.VoteSkip.IsRunning);
+        Assert.NotNull(setup.VoteSkip.Display);
+        setup.Stay("late");
+        setup.ChangeVideo(new NowPlaying("next", "Next video", null));
+        Assert.True(setup.VoteSkip.IsRunning);
+        Assert.Equal((1, 0), (setup.VoteSkip.Display!.Options[0].Votes, setup.VoteSkip.Display.Options[1].Votes));
+        send.SetResult();
+
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning);
+        Assert.False(setup.VoteSkip.IsRunning);
+        Assert.DoesNotContain(setup.Sent, m => m.StartsWith("The video changed"));
+    });
+
+    [Fact]
+    public void ACancelWhileTheResultIsPosted_StartsNoVoteForTheNextVideo() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Average = 1;
+        var send = new TaskCompletionSource();
+        setup.Chat.SendMessageAsync(Arg.Is<string>(m => m.StartsWith("The chat voted to skip"))).Returns(send.Task);
+        setup.Start();
+        await setup.FinishAsync();
+
+        Assert.NotNull(setup.VoteSkip.Cancel(Chat.Command("!cancelvote", user: "mod")));
+        send.SetResult();
+        await Async.SettleAsync();
+
+        Assert.False(setup.VoteSkip.IsRunning);
+        Assert.False(setup.Votes.IsRunning);
+        await setup.Playback.DidNotReceive().SkipAsync();
+    });
+
+    [Fact]
     public void AfterASuccessfulSkip_VoteSkipCanBeUsedAgain_OnceTheVoteForTheNextVideoIsOver() => UiContext.Run(async () =>
     {
         using var setup = new Setup();
@@ -277,6 +361,21 @@ public class VoteSkipManagerTests
         await setup.FinishAsync();
 
         Assert.StartsWith("The chat voted to stay (!stay 2, !skip 0)", setup.Sent.Last());
+    });
+
+    [Fact]
+    public void TheVoteSkip_IsEnding_FromItsWarningOn() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Start();
+        await Async.SettleAsync();
+        Assert.False(setup.VoteSkip.Display!.Ending);
+
+        setup.Time.Advance(Duration / 2);
+        await Async.SettleAsync();
+
+        Assert.True(setup.VoteSkip.Display!.Ending);
+        Assert.Contains("left to vote on skipping", setup.Sent.Last());
     });
 
     [Fact]
@@ -563,4 +662,19 @@ public class VoteSkipManagerTests
     });
 
     #endregion
+
+    [Fact]
+    public void SkipWins_TheVoteForTheNextVideo_RunsItsOwnLength() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.UseNextVideoVoteDuration(TimeSpan.FromSeconds(45));
+        setup.Start("viewer");
+        setup.Skip("b");
+        setup.Skip("c");
+
+        await setup.FinishAsync();
+        await Async.WaitUntilAsync(() => setup.Sent.Any(m => m.StartsWith("Vote for the next video!")));
+
+        Assert.Contains(setup.Sent, m => m.StartsWith("Vote for the next video!") && m.Contains("Voting ends 45 seconds after the last option."));
+    });
 }

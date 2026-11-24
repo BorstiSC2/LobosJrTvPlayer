@@ -30,7 +30,8 @@ namespace YouTubeVideoPlayer.Twitch.Auth
     public sealed record TokenResponse(string AccessToken, string RefreshToken, TimeSpan ExpiresIn, IReadOnlyList<string> Scopes);
 
     /// <summary>The result of <c>/oauth2/validate</c> for a valid token.</summary>
-    public sealed record TokenValidation(string Login, string UserId, TimeSpan ExpiresIn, IReadOnlyList<string> Scopes);
+    /// <param name="ClientId">The application the token was made for (the Twitch API needs it with the token).</param>
+    public sealed record TokenValidation(string Login, string UserId, TimeSpan ExpiresIn, IReadOnlyList<string> Scopes, string ClientId = "");
 
     public enum DevicePollStatus
     {

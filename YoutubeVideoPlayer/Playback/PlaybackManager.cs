@@ -62,6 +62,12 @@ namespace YouTubeVideoPlayer.Playback
         /// <summary>How often a resumed video is checked for having reached its start point (ends <see cref="IsResuming"/>).</summary>
         public static readonly TimeSpan ResumeCheckInterval = TimeSpan.FromMilliseconds(250);
 
+        /// <summary>
+        /// A requested video (a vote winner) that stops by itself before it has played this long did not really play:
+        /// <see cref="RequestedVideoFailed"/> is raised. Later it counts as played, and moving on is the normal end.
+        /// </summary>
+        public static readonly TimeSpan FailedStartWindow = TimeSpan.FromSeconds(30);
+
         private readonly SynchronizationContext _context;
         private readonly IYouTubeService _youtube;
         private readonly IVideoSource _videoSource;
@@ -75,6 +81,9 @@ namespace YouTubeVideoPlayer.Playback
         private CancellationTokenSource? _playNextCancellationTokenSource;
         private Task? _playNextTask;
         private string? _queuedVideoId;
+        private string? _requestedVideoLoading;
+        private bool _currentIsRequested;
+        private string? _failedRequest;
         private PlaybackHold? _hold;
         private bool _isWaitingForHold;
         private DateTimeOffset _waitingSince;
@@ -165,6 +174,9 @@ namespace YouTubeVideoPlayer.Playback
 
         /// <summary>The metadata of the new video is known and playback is starting.</summary>
         public event EventHandler<NowPlaying>? NowPlayingChanged;
+
+        /// <inheritdoc/>
+        public event EventHandler<string>? RequestedVideoFailed;
 
         /// <summary>
         /// The current video played to its end (the player reported the end; not a skip, an error or the watchdog).
@@ -386,9 +398,11 @@ namespace YouTubeVideoPlayer.Playback
 
         private async Task<bool> PlayVideoInternalAsync(string videoId, CancellationToken cancellationToken)
         {
+            // While it is looked up, the end of the current video must not cancel it (see AdvanceAutomatically).
+            _requestedVideoLoading = videoId;
             try
             {
-                await PlayVideoByIdAsync(videoId, cancellationToken);
+                await PlayVideoByIdAsync(videoId, cancellationToken, requested: true);
                 _queuedVideoId = null; // an explicit choice replaces an older queued one
                 cancellationToken.ThrowIfCancellationRequested();
                 return false;
@@ -403,8 +417,26 @@ namespace YouTubeVideoPlayer.Playback
             catch (Exception ex)
             {
                 Logger.Log($"Playing the requested video '{videoId}' failed; playing the next video instead.", ex);
+                ClearRequestedVideoLoading(videoId);
+                _failedRequest = videoId;
                 return await PlayNextInternalAsync(cancellationToken);
             }
+            finally
+            {
+                ClearRequestedVideoLoading(videoId);
+            }
+        }
+
+        private void ClearRequestedVideoLoading(string videoId)
+        {
+            if (_requestedVideoLoading == videoId)
+                _requestedVideoLoading = null;
+        }
+
+        private void OnRequestedVideoFailed(string videoId)
+        {
+            if (!_disposed)
+                RequestedVideoFailed?.Invoke(this, videoId);
         }
 
         /// <summary>
@@ -481,13 +513,33 @@ namespace YouTubeVideoPlayer.Playback
         /// Moves on after the current video ended or failed by itself: to the next video, or, if a hold for this video
         /// is active, into the wait for it (a black screen until the hold is released).
         /// </summary>
-        private void AdvanceAutomatically(string failureMessage)
+        /// <param name="failed">The video stopped by itself (error, timeout, broken stream, freeze), not at its regular end.</param>
+        private void AdvanceAutomatically(string failureMessage, bool failed)
         {
+            // A vote winner is being looked up and replaces this video in a moment; the next video would cancel it.
+            if (_requestedVideoLoading is { } loading)
+            {
+                Logger.Log($"Not moving on: the requested video '{loading}' is being loaded and plays next.");
+                return;
+            }
+
             if (_hold is { } hold && Current != null && ReferenceEquals(hold.Video, Current))
             {
                 if (!_isWaitingForHold)
                     EnterWaiting();
                 return;
+            }
+
+            var failedRequest = failed && _currentIsRequested && Current is { } current
+                && Math.Max(_player.TimeMs, _lastKnownPositionMs) < (long)FailedStartWindow.TotalMilliseconds
+                    ? current.VideoId
+                    : null;
+
+            if (failedRequest != null)
+            {
+                Logger.Log($"The requested video '{failedRequest}' stopped right after its start; playing the next video instead.");
+                _currentIsRequested = false;
+                _failedRequest = failedRequest;
             }
 
             PlayNextAsync().FireAndForget(failureMessage);
@@ -629,6 +681,7 @@ namespace YouTubeVideoPlayer.Playback
                 if (id == null && !_videoSource.TryGetNextVideoId(after, out id))
                 {
                     Logger.Log("No videos available to play.");
+                    _failedRequest = null; // nothing plays instead, so there is nothing to vote about later
                     return !cancellationToken.IsCancellationRequested;
                 }
 
@@ -640,7 +693,7 @@ namespace YouTubeVideoPlayer.Playback
                     if (prefetched == null)
                         await Task.Delay(DelayBeforeNextVideo, _time, cancellationToken);
 
-                    await PlayVideoByIdAsync(id, cancellationToken, prefetched?.Video);
+                    await PlayVideoByIdAsync(id, cancellationToken, prefetched?.Video, requested: queued != null);
 
                     if (queued != null && _queuedVideoId == queued)
                         _queuedVideoId = null;
@@ -665,6 +718,8 @@ namespace YouTubeVideoPlayer.Playback
                     {
                         if (_queuedVideoId == queued)
                             _queuedVideoId = null;
+
+                        _failedRequest = queued;
                     }
                     else
                     {
@@ -677,7 +732,9 @@ namespace YouTubeVideoPlayer.Playback
         }
 
         /// <param name="resolved">The streams if they were looked up in advance; otherwise they are looked up now.</param>
-        private async Task PlayVideoByIdAsync(string idOrUrl, CancellationToken cancellationToken, Task<ResolvedVideo>? resolved = null)
+        /// <param name="requested">It was asked for (a vote winner): a failure right after its start raises <see cref="RequestedVideoFailed"/>.</param>
+        private async Task PlayVideoByIdAsync(
+            string idOrUrl, CancellationToken cancellationToken, Task<ResolvedVideo>? resolved = null, bool requested = false)
         {
             Logger.Log($"Queuing new video with Id: {idOrUrl}");
 
@@ -700,8 +757,18 @@ namespace YouTubeVideoPlayer.Playback
 
             _player.Play(video.VideoUrl, video.AudioUrl);
 
+            _currentIsRequested = requested;
             Current = new NowPlaying(idOrUrl, video.Title, video.Duration);
             NowPlayingChanged?.Invoke(this, Current);
+
+            // A requested video failed before, and this one plays instead: report it now that it is Current, so a revote
+            // offers what follows it. Not if this is a requested video itself (another vote's winner replaced it).
+            if (_failedRequest is { } failed)
+            {
+                _failedRequest = null;
+                if (!requested)
+                    OnRequestedVideoFailed(failed);
+            }
 
             // Now that this video plays, choose and look up the one after it.
             _prefetcher.Start(idOrUrl);
@@ -747,7 +814,7 @@ namespace YouTubeVideoPlayer.Playback
                 if (TryResume())
                     return;
 
-                AdvanceAutomatically("PlayNextAsync after an early end failed.");
+                AdvanceAutomatically("PlayNextAsync after an early end failed.", failed: true);
                 return;
             }
 
@@ -757,7 +824,7 @@ namespace YouTubeVideoPlayer.Playback
             if (video != null)
                 VideoFinished?.Invoke(this, video);
 
-            AdvanceAutomatically("PlayNextAsync after EndReached failed.");
+            AdvanceAutomatically("PlayNextAsync after EndReached failed.", failed: false);
         }
 
         private void OnEncounteredError()
@@ -765,14 +832,14 @@ namespace YouTubeVideoPlayer.Playback
             // Stream error; skip to next video silently
             LogPlayerProblem("The player encountered an error; skipping to the next video.");
             StopBufferingWatch();
-            AdvanceAutomatically("PlayNextAsync after a player error failed.");
+            AdvanceAutomatically("PlayNextAsync after a player error failed.", failed: true);
         }
 
         private void OnBufferingTimeout()
         {
             LogPlayerProblem($"Buffering took longer than {BufferingTimeout.TotalSeconds:0} seconds; skipping to the next video.");
             StopBufferingWatch();
-            AdvanceAutomatically("PlayNextAsync after buffering timeout failed.");
+            AdvanceAutomatically("PlayNextAsync after buffering timeout failed.", failed: true);
         }
 
         /// <summary>Logs <paramref name="message"/> with the player's own recent warnings and errors.</summary>
@@ -970,7 +1037,7 @@ namespace YouTubeVideoPlayer.Playback
                 if (TryResume())
                     return;
 
-                AdvanceAutomatically("PlayNextAsync after fail-safe trigger failed.");
+                AdvanceAutomatically("PlayNextAsync after fail-safe trigger failed.", failed: true);
             }
 
             _failSafePlaybackTime = currentPlaybackTime;
