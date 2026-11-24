@@ -44,6 +44,16 @@ public class VoteTickerTests
     public void WhileTheOptionsArePosted_NoTimeIsShown() =>
         Assert.Null(VoteTicker.From(ThreeOptions(VoteKind.NextVideo, null, 0, 0, 0)).Time);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheTicker_IsEnding_WhenTheVoteSaysSo(bool ending)
+    {
+        var display = ThreeOptions(VoteKind.NextVideo, TimeSpan.FromSeconds(30), 1, 0, 0) with { Ending = ending };
+
+        Assert.Equal(ending, VoteTicker.From(display).Ending);
+    }
+
     [Fact]
     public void AVote_IsComplete_OnceItsOptionsAreKnown_EvenBeforeItsTime()
     {

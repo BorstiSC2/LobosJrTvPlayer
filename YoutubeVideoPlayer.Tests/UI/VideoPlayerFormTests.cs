@@ -28,8 +28,8 @@ public class VideoPlayerFormTests
     {
         public TestableForm(PlaybackManager playback, PlaylistManager playlists, AppCoordinator coordinator,
             TwitchChatService? twitch, TwitchTokenManager? tokens, string botName, AutoVoteManager? autoVote = null,
-            IReadOnlyList<IVoteDisplay>? voteDisplays = null, NowPlayingSchedule? nowPlaying = null)
-            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays, nowPlaying)
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null, NowPlayingSchedule? nowPlaying = null, AvatarSet? avatars = null)
+            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays, nowPlaying, avatars)
         {
         }
 
@@ -40,7 +40,7 @@ public class VideoPlayerFormTests
     private sealed class App : IDisposable
     {
         public App(ITwitchClient? twitchClient = null, TwitchTokenManager? tokens = null, TwitchSettings? twitchSettings = null,
-            PlaylistSetup? playlists = null)
+            PlaylistSetup? playlists = null, AvatarSet? avatars = null)
         {
             Playlists = playlists ?? new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2");
             Playlists.YouTube.ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -66,7 +66,7 @@ public class VideoPlayerFormTests
             NowPlaying = new NowPlayingSchedule(Playback, Time);
             Form = new TestableForm(
                 Playback, PlaylistManager, Coordinator, Twitch, tokens, "lobosbot", AutoVote,
-                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes }, NowPlaying);
+                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes }, NowPlaying, avatars);
         }
 
         public PlaylistSetup Playlists { get; }
@@ -677,13 +677,86 @@ public class VideoPlayerFormTests
 
     #region Vote ticker
 
-    private static App VoteApp()
+    private static App VoteApp(AvatarSet? avatars = null)
     {
         var playlists = new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2", "a3", "a4", "a5");
         playlists.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => new YouTubeVideoDetails("Option " + call.ArgAt<string>(0), null));
-        return new App(Chat.Client(), playlists: playlists);
+        return new App(Chat.Client(), playlists: playlists, avatars: avatars);
     }
+
+    [Fact]
+    public void WithThePictures_TheOverlaysShowTheWolves_AndTheVolumeKeepsItsIcon() => UiContext.Run(async () =>
+    {
+        using var avatars = AvatarSet.Load(AnimatedAvatarTests.Folder);
+        using var app = VoteApp(avatars);
+        await app.ShowAsync();
+
+        Assert.Same(avatars.Waiting, app.BufferingLabel.Avatar);
+        Assert.Same(avatars.Waiting, app.WaitingLabel.Avatar);
+        Assert.Same(avatars.Waiting, app.ResumeLabel.Avatar);
+        Assert.Null(app.VolumeLabel.Avatar);
+
+        await app.PressPlayAsync();
+        await Async.WaitUntilAsync(() => app.Card.Showing);
+        Assert.Contains(app.Card.Avatar, avatars.Current);
+
+        app.Time.Advance(NowPlayingSchedule.ShowDuration); // the card's time is over
+        await Async.WaitUntilAsync(() => !app.Card.Visible);
+        await app.Votes!.StartAsync("mod");
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+        Assert.Same(avatars.VoteNow, app.TitleStrip.TickerAvatar);
+        await Async.WaitUntilAsync(() => ReferenceEquals(app.TitleStrip.Avatar, avatars.VoteNow),
+            because: "the strip shows the ticker's picture once the ticker is shown");
+    }, sta: true);
+
+    [Fact]
+    public void LoadingTheFirstVideo_ShowsTheWaitingWolf_AndReady_TheOkPicture() => UiContext.Run(async () =>
+    {
+        using var dir = new TempDirectory();
+        foreach (var file in Directory.GetFiles(AnimatedAvatarTests.Folder))
+            File.Copy(file, Path.Combine(dir.Path, Path.GetFileName(file)));
+        using (var ok = new Bitmap(64, 64))
+            ok.Save(dir.File("ok.png"), System.Drawing.Imaging.ImageFormat.Png);
+        using var avatars = AvatarSet.Load(dir.Path);
+        Assert.NotNull(avatars.Ok);
+
+        using var app = new App(avatars: avatars);
+        var lookup = new TaskCompletionSource<ResolvedVideo>();
+        app.Playlists.YouTube.ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+        await app.ShowAsync();
+        await Async.WaitUntilAsync(() => app.TitleStrip.Title == "Loading first video...");
+        await Async.WaitUntilAsync(() => ReferenceEquals(app.TitleStrip.Avatar, avatars.Waiting));
+
+        lookup.SetResult(PlaybackSetup.Resolved("a1"));
+        await Async.WaitUntilAsync(() => app.TitleStrip.Title.StartsWith("Ready"));
+        Assert.Same(avatars.Ok, app.TitleStrip.Avatar);
+        Assert.False(avatars.Ok!.IsAnimated); // a still picture: no clock
+        Assert.False(app.TitleStrip.IsAvatarClockRunning);
+    }, sta: true);
+
+    [Fact]
+    public void LoadingTheNextVideo_ShowsTheWaitingWolf() => UiContext.Run(async () =>
+    {
+        using var avatars = AvatarSet.Load(AnimatedAvatarTests.Folder);
+        using var app = new App(avatars: avatars);
+        await app.ShowAsync();
+        Assert.StartsWith("Ready", app.TitleStrip.Title);
+        Assert.Same(avatars.Ok, app.TitleStrip.Avatar); // ok.png (the play icon while the file is not there)
+
+        await app.PressPlayAsync();
+        var lookup = new TaskCompletionSource<ResolvedVideo>();
+        app.Playlists.YouTube.ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+
+        app.Playback.SkipAsync().FireAndForget("test skip"); // the next video is looked up (and that takes a while)
+        await Async.SettleAsync();
+        app.Time.Advance(PlaybackManager.DelayBeforeNextVideo); // not prepared in advance: the usual pause first
+        await Async.WaitUntilAsync(() => app.TitleStrip.Title == "Loading next video...");
+        await Async.WaitUntilAsync(() => ReferenceEquals(app.TitleStrip.Avatar, avatars.Waiting));
+
+        lookup.SetResult(PlaybackSetup.Resolved("a2"));
+        await Async.WaitUntilAsync(() => app.TitleStrip.Title.Length == 0);
+    }, sta: true);
 
     [Fact]
     public void AVoteThatStartsWhileTheCardIsUp_WaitsUntilTheCardsTimeIsOver_ThenScrollsItsOptions() => UiContext.Run(async () =>

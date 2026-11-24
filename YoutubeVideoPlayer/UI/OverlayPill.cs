@@ -21,8 +21,8 @@ namespace YouTubeVideoPlayer.UI
         private bool _animated;
         private int _frame;
 
-        public OverlayPill(char icon, bool layered = true)
-            : base(layered)
+        public OverlayPill(char icon, bool layered = true, TimeProvider? timeProvider = null)
+            : base(layered, timeProvider)
         {
             _icon = icon;
             UpdateSize();
@@ -100,8 +100,15 @@ namespace YouTubeVideoPlayer.UI
             var height = Height;
             OverlayStyle.FillPill(g, new RectangleF(0, 0, Width, height));
             var circle = style.Circle(height);
-            OverlayStyle.FillCircle(g, circle);
-            OverlayStyle.DrawGlyph(g, _icon, style.Icon, circle);
+            if (Avatar is { } avatar)
+            {
+                style.DrawAvatar(g, circle, avatar, AvatarFrame);
+            }
+            else
+            {
+                OverlayStyle.FillCircle(g, circle);
+                OverlayStyle.DrawGlyph(g, _icon, style.Icon, circle);
+            }
 
             var left = style.TextLeft(height);
             OverlayStyle.DrawText(g, ShownText, style.Strong, Color.White,

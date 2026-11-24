@@ -364,6 +364,21 @@ public class VoteSkipManagerTests
     });
 
     [Fact]
+    public void TheVoteSkip_IsEnding_FromItsWarningOn() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Start();
+        await Async.SettleAsync();
+        Assert.False(setup.VoteSkip.Display!.Ending);
+
+        setup.Time.Advance(Duration / 2);
+        await Async.SettleAsync();
+
+        Assert.True(setup.VoteSkip.Display!.Ending);
+        Assert.Contains("left to vote on skipping", setup.Sent.Last());
+    });
+
+    [Fact]
     public void HalfwayThrough_TheChatIsReminded() => UiContext.Run(async () =>
     {
         using var setup = new Setup();

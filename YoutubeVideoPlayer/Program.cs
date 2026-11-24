@@ -53,6 +53,7 @@ namespace YouTubeVideoPlayer
             var playback = new PlaybackManager(youtube, playlists, player);
             // When the "now playing" card is up: at every video start, every 10 minutes, and on !current.
             using var nowPlaying = new NowPlayingSchedule(playback);
+            using var avatars = AvatarSet.Load();
 
             var twitchSettings = TwitchSettings.Load();
             var twitchTokens = twitchSettings is { IsComplete: true, UsesAppSignIn: true }
@@ -159,7 +160,8 @@ namespace YouTubeVideoPlayer
                     twitchSettings?.SignIn.BotLogin ?? string.Empty,
                     autoVote,
                     votes == null ? null : new IVoteDisplay[] { voteSkip!, votes },
-                    nowPlaying));
+                    nowPlaying,
+                    avatars));
             }
             finally
             {

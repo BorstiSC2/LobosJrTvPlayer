@@ -112,11 +112,21 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                     .Select((o, i) => new VoteDisplayOption($"{i + 1}", Shorten(o.Title), $"!vote {i + 1}", counts[i]))
                     .ToList();
                 TimeSpan? left = session.EndsAt is { } endsAt ? Max(TimeSpan.Zero, endsAt - _time.GetUtcNow()) : null;
-                return new VoteDisplay(kind, options, left);
+                return new VoteDisplay(kind, options, left, Ending: IsEnding(session.Warned, session.Duration, left));
             }
         }
 
         private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+        /// <summary>Votes of at least this length get a warning halfway through ("1 minute left! ...").</summary>
+        internal static readonly TimeSpan WarningFrom = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// Whether a vote is in its last part (<see cref="VoteDisplay.Ending"/>): once its warning has been posted, or, for a
+        /// vote too short for one, from halfway on.
+        /// </summary>
+        internal static bool IsEnding(bool warned, TimeSpan duration, TimeSpan? left) =>
+            warned || (duration < WarningFrom && left is { } remaining && remaining <= duration / 2);
 
         private void OnDisplayChanged() => DisplayChanged?.Invoke(this, EventArgs.Empty);
 
@@ -325,11 +335,13 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             OnDisplayChanged();
 
-            // Remind the chat halfway through longer votes.
-            var reminderAt = session.Duration >= TimeSpan.FromSeconds(60) ? session.Duration / 2 : TimeSpan.Zero;
+            // Remind the chat halfway through longer votes; the ticker shows the vote is ending from the same moment.
+            var reminderAt = session.Duration >= WarningFrom ? session.Duration / 2 : TimeSpan.Zero;
             if (reminderAt > TimeSpan.Zero)
             {
                 await Task.Delay(reminderAt, _time, token);
+                session.Warned = true;
+                OnDisplayChanged();
                 await TrySendAsync($"{FormatDuration(session.Duration - reminderAt)} left! {FormatStandings(session)} – vote with {range}.");
             }
 
@@ -583,6 +595,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             /// <summary>The countdown after the last option has been posted (shortened if the options took long to find).</summary>
             public TimeSpan Duration { get; set; }
+
+            /// <summary>The warning halfway through has been posted.</summary>
+            public bool Warned { get; set; }
 
             /// <summary>When the countdown ends; <c>null</c> until it has started (the options are still being posted).</summary>
             public DateTimeOffset? EndsAt { get; set; }

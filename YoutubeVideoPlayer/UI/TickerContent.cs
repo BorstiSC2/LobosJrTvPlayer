@@ -17,7 +17,9 @@ namespace YouTubeVideoPlayer.UI
     /// <param name="Time">The time left, e.g. <c>1:20</c>; <c>null</c> while it is not known.</param>
     /// <param name="Lead">Muted text before the items (e.g. the video a skip vote is about); <c>null</c> for none.</param>
     /// <param name="Hint">Muted text after the items (what to type); <c>null</c> for none.</param>
-    public sealed record TickerContent(char Icon, string Label, string? Time, string? Lead, IReadOnlyList<TickerItem> Items, string? Hint)
+    /// <param name="Ending">The vote is about to end (the ticker's avatar shows it; no cross-fade).</param>
+    public sealed record TickerContent(
+        char Icon, string Label, string? Time, string? Lead, IReadOnlyList<TickerItem> Items, string? Hint, bool Ending = false)
     {
         /// <summary>The standing part (badge and time) as text; it is drawn again when this changes.</summary>
         public string StandingText => Time == null ? Label : $"{Label} {Time}";

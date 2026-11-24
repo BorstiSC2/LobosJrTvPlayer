@@ -46,6 +46,8 @@ namespace YouTubeVideoPlayer.UI
         private readonly FrameClock _clock;
 
         private string _title = string.Empty;
+        private AnimatedAvatar? _titleAvatar;
+        private AnimatedAvatar? _tickerAvatar;
         private TickerContent? _ticker;
         private string? _tickerKey;
         private int _availableWidth = 100;
@@ -82,7 +84,7 @@ namespace YouTubeVideoPlayer.UI
         /// <param name="timeProvider">The clock for the animation; <see cref="TimeProvider.System"/> by default.</param>
         /// <param name="layered"><c>false</c> makes a normal window, as where Windows does not allow a layered one.</param>
         internal TitleStrip(TimeProvider? timeProvider, bool layered)
-            : base(layered)
+            : base(layered, timeProvider)
         {
             _time = timeProvider ?? TimeProvider.System;
             Size = new Size(0, Style.PillHeight);
@@ -118,6 +120,42 @@ namespace YouTubeVideoPlayer.UI
 
                 Retarget();
             }
+        }
+
+        /// <summary>The picture next to the status text; <c>null</c> shows the play icon.</summary>
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal AnimatedAvatar? TitleAvatar
+        {
+            get => _titleAvatar;
+            set
+            {
+                _titleAvatar = value;
+                UpdateShownAvatar();
+            }
+        }
+
+        /// <summary>The picture of the vote ticker; <c>null</c> shows the vote's icon.</summary>
+        [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        internal AnimatedAvatar? TickerAvatar
+        {
+            get => _tickerAvatar;
+            set
+            {
+                _tickerAvatar = value;
+                UpdateShownAvatar();
+            }
+        }
+
+        /// <summary>
+        /// The overlay's <see cref="LayeredOverlay.Avatar"/> is the picture of what is shown: it changes together with the
+        /// content (while the text is faded out), not before.
+        /// </summary>
+        private void UpdateShownAvatar()
+        {
+            if (_shown == Content.Ticker)
+                Avatar = _tickerAvatar;
+            else if (_shown == Content.Title)
+                Avatar = _titleAvatar;
         }
 
         /// <summary>What the vote ticker shows; <c>null</c> shows the title.</summary>
@@ -287,6 +325,7 @@ namespace YouTubeVideoPlayer.UI
                 {
                     var appearing = _shown == Content.None || _boxAlpha <= 0;
                     _shown = desired;
+                    UpdateShownAvatar();
                     _shownTickerKey = desired == Content.Ticker ? _tickerKey : null;
                     _scrollOffset = 0;
                     _frameDebt = 0;
@@ -507,7 +546,11 @@ namespace YouTubeVideoPlayer.UI
 
             if (_shown == Content.Ticker && _ticker is { } ticker)
             {
-                OverlayStyle.DrawGlyph(g, ticker.Icon, style.LargeIcon, circle, _alpha);
+                // The vote's avatar stays while the ticker cross-fades; only an icon fades with the text.
+                if (Avatar is { } avatar)
+                    style.DrawAvatar(g, circle, avatar, AvatarFrame);
+                else
+                    OverlayStyle.DrawGlyph(g, ticker.Icon, style.LargeIcon, circle, _alpha);
                 var rows = Rows;
 
                 // The items scroll from the right end to the circle, where they disappear.
@@ -533,7 +576,10 @@ namespace YouTubeVideoPlayer.UI
             }
             else if (_shown == Content.Title)
             {
-                style.DrawPlay(g, circle, _alpha);
+                if (Avatar is { } avatar)
+                    style.DrawAvatar(g, circle, avatar, AvatarFrame);
+                else
+                    style.DrawPlay(g, circle, _alpha);
                 if (_body is { } body)
                 {
                     g.SetClip(new Rectangle(0, 0, Math.Max(0, Width - TextRight / 2), height));

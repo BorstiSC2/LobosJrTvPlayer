@@ -87,12 +87,15 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
                 var (skip, stay) = session.Count();
                 var left = session.EndsAt - _time.GetUtcNow();
+                if (left < TimeSpan.Zero)
+                    left = TimeSpan.Zero;
                 return new VoteDisplay(
                     VoteKind.Skip,
                     new[] { new VoteDisplayOption(null, "!skip", "!skip", skip), new VoteDisplayOption(null, "!stay", "!stay", stay) },
-                    left > TimeSpan.Zero ? left : TimeSpan.Zero,
+                    left,
                     SkipVoteManager.Shorten(session.Video.Title),
-                    session.Required);
+                    session.Required,
+                    SkipVoteManager.IsEnding(session.Warned, Duration, left));
             }
         }
 
@@ -214,11 +217,14 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 $"{Votes(session.Required)} ({Percent}% of ~{session.Average.ToString("0.#", CultureInfo.InvariantCulture)} recent chatters). " +
                 $"Voting ends in {SkipVoteManager.FormatDuration(Duration)}.");
 
-            // Remind the chat halfway through longer votes (the same rule as the vote for the next video).
-            var reminderAt = Duration >= TimeSpan.FromSeconds(60) ? Duration / 2 : TimeSpan.Zero;
+            // Remind the chat halfway through longer votes (the same rule as the vote for the next video); the ticker shows the
+            // vote is ending from the same moment.
+            var reminderAt = Duration >= SkipVoteManager.WarningFrom ? Duration / 2 : TimeSpan.Zero;
             if (reminderAt > TimeSpan.Zero)
             {
                 await Task.Delay(reminderAt, _time, token);
+                session.Warned = true;
+                OnDisplayChanged();
                 var (skipSoFar, staySoFar) = session.Count();
                 await TrySendAsync(
                     $"{SkipVoteManager.FormatDuration(Duration - reminderAt)} left to vote on skipping \"{title}\": " +
@@ -348,6 +354,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             /// <summary>The video the vote is about.</summary>
             public NowPlaying Video { get; }
+
+            /// <summary>The warning halfway through has been posted.</summary>
+            public bool Warned { get; set; }
 
             /// <summary>The <c>!skip</c> votes needed (taken when the vote started).</summary>
             public int Required { get; }

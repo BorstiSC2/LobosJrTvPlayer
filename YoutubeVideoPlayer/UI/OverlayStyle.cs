@@ -214,6 +214,62 @@ namespace YouTubeVideoPlayer.UI
             g.SmoothingMode = SmoothingMode.AntiAlias;
             using (var track = new Pen(Fade(RingTrack, alpha), stroke))
                 g.DrawEllipse(track, ring);
+            DrawProgressArc(g, ring, stroke, share, alpha);
+        }
+
+        /// <summary>The orange edge around an avatar, between the picture and the circle's outline.</summary>
+        public float AvatarEdge => Math.Max(3f, Scale(4));
+
+        /// <summary>
+        /// An avatar in the circle: the current frame on the orange disc, inset by <see cref="AvatarEdge"/> (a picture with
+        /// its own round frame fills the circle, without the disc).
+        /// </summary>
+        public void DrawAvatar(Graphics g, RectangleF circle, AnimatedAvatar avatar, int frame, double alpha = 1)
+        {
+            var inner = circle;
+            if (!avatar.Look.OwnFrame)
+            {
+                FillCircle(g, circle, alpha);
+                inner = RectangleF.Inflate(circle, -AvatarEdge, -AvatarEdge);
+            }
+
+            var diameter = Math.Max(1, (int)Math.Round(inner.Width));
+            var bitmap = avatar.Frame(diameter, frame);
+
+            // On whole pixels: a copy, not a resampled (blurred) picture.
+            var target = new Rectangle(
+                (int)Math.Round(inner.X + (inner.Width - diameter) / 2f),
+                (int)Math.Round(inner.Y + (inner.Height - diameter) / 2f),
+                diameter,
+                diameter);
+            var interpolation = g.InterpolationMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic; // only matters while the card pops up (scaled)
+            if (alpha >= 1)
+            {
+                g.DrawImage(bitmap, target, 0, 0, diameter, diameter, GraphicsUnit.Pixel);
+            }
+            else
+            {
+                using var attributes = new System.Drawing.Imaging.ImageAttributes();
+                attributes.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = (float)Math.Clamp(alpha, 0, 1) });
+                g.DrawImage(bitmap, target, 0, 0, diameter, diameter, GraphicsUnit.Pixel, attributes);
+            }
+
+            g.InterpolationMode = interpolation;
+        }
+
+        /// <summary>The progress around an avatar: a white arc in its orange edge (see <see cref="DrawAvatar"/>).</summary>
+        public void DrawEdgeRing(Graphics g, RectangleF circle, double share, double alpha = 1)
+        {
+            var stroke = AvatarEdge;
+            var ring = RectangleF.Inflate(circle, -stroke / 2, -stroke / 2);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            DrawProgressArc(g, ring, stroke, share, alpha);
+        }
+
+        /// <summary>The white arc of a ring, clockwise from the top.</summary>
+        private static void DrawProgressArc(Graphics g, RectangleF ring, float stroke, double share, double alpha)
+        {
             var sweep = (float)(360 * Math.Clamp(share, 0, 1));
             if (sweep <= 0)
                 return;

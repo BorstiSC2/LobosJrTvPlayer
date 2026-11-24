@@ -603,6 +603,43 @@ public class SkipVoteManagerTests
     });
 
     [Fact]
+    public void TheVoteIsEnding_FromTheMomentItsWarningIsPosted() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        var warned = new List<bool>();
+        setup.Manager.DisplayChanged += (_, _) => warned.Add(setup.Sent.Any(m => m.Contains("left!")));
+        await setup.StartAsync();
+        await setup.AnnounceAsync();
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromMinutes(1) - TimeSpan.FromSeconds(1));
+        await Async.SettleAsync();
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(1)); // halfway: "1 minute left! ..."
+        await Async.SettleAsync();
+
+        Assert.True(setup.Manager.Display!.Ending);
+        Assert.Contains(setup.Sent, m => m.StartsWith("1 minute left!"));
+        Assert.Contains(false, warned); // a display change for the warning itself: the ticker switches with it
+    });
+
+    [Fact]
+    public void AVoteTooShortForAWarning_IsEndingFromHalfway() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(duration: TimeSpan.FromSeconds(40));
+        await setup.StartAsync();
+        await setup.AnnounceAsync();
+
+        setup.Time.Advance(TimeSpan.FromSeconds(19));
+        Assert.False(setup.Manager.Display!.Ending);
+
+        setup.Time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(setup.Manager.Display!.Ending);
+        Assert.DoesNotContain(setup.Sent, m => m.Contains("left!"));
+    });
+
+    [Fact]
     public void HalfwayReminder_WithoutVotes() => UiContext.Run(async () =>
     {
         using var setup = new Setup(duration: TimeSpan.FromMinutes(6));

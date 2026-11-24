@@ -23,6 +23,7 @@ namespace YouTubeVideoPlayer.UI
         public static TickerContent From(VoteDisplay display)
         {
             var time = display.TimeLeft is { } left ? SkipVoteManager.FormatTimeLeft(left) : null;
+            var ending = display.Ending;
             var most = display.Options.Count == 0 ? 0 : display.Options.Max(o => o.Votes);
 
             if (display.Kind == VoteKind.Skip)
@@ -38,7 +39,7 @@ namespace YouTubeVideoPlayer.UI
                     .ToList();
                 var lead = display.Subject == null ? null : $"\"{display.Subject}\"";
                 return new TickerContent(OverlayStyle.SkipGlyph, "Skip this video?", time, lead, items,
-                    "Type " + string.Join(" or ", display.Options.Select(o => o.Command)));
+                    "Type " + string.Join(" or ", display.Options.Select(o => o.Command)), ending);
             }
 
             var total = display.Options.Sum(o => o.Votes);
@@ -54,7 +55,7 @@ namespace YouTubeVideoPlayer.UI
             if (display.Kind == VoteKind.VideoAfterCurrent)
                 hint += " for the video after this one";
 
-            return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, options, hint);
+            return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, options, hint, ending);
         }
     }
 }

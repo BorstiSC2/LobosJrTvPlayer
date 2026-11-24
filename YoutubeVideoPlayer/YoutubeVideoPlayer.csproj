@@ -47,6 +47,10 @@
     <None Update="twitchsettings.example.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- The wolf avatars of the overlays (AvatarSet), next to the exe so another picture needs no rebuild. -->
+    <None Include="..\LobosResources\*.gif;..\LobosResources\*.png" Link="LobosResources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <!-- Bot credentials stay local (gitignored); copied only if the file exists. -->
     <None Update="twitchsettings.json" Condition="Exists('twitchsettings.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

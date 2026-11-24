@@ -63,7 +63,7 @@ namespace YouTubeVideoPlayer.UI
         /// <c>false</c> makes a normal window, as where Windows does not allow a layered one (tests; the test host allows it).
         /// </param>
         internal NowPlayingCard(TimeProvider? timeProvider, bool layered)
-            : base(layered)
+            : base(layered, timeProvider)
         {
             _time = timeProvider ?? TimeProvider.System;
             _clock = new FrameClock(_ =>
@@ -89,6 +89,13 @@ namespace YouTubeVideoPlayer.UI
                 Retarget();
             }
         }
+
+        /// <summary>
+        /// Gives the card its picture each time it opens (<see cref="AvatarSet.NextCurrent"/>); without one, or when it
+        /// gives none, the card shows the play icon.
+        /// </summary>
+        [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal Func<AnimatedAvatar?>? NextAvatar { get; set; }
 
         /// <summary>Whether the card should be up; it opens or closes to that state.</summary>
         [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -247,6 +254,8 @@ namespace YouTubeVideoPlayer.UI
         {
             if (Target > 0 && !Visible)
             {
+                if (NextAvatar != null)
+                    Avatar = NextAvatar();
                 Present(); // nothing to see yet, but no stale frame either
                 Visible = true;
             }
@@ -340,11 +349,20 @@ namespace YouTubeVideoPlayer.UI
 
             OverlayStyle.FillPill(g, new RectangleF(0, 0, pill, height), alpha);
             var circle = style.Circle(height);
-            OverlayStyle.FillCircle(g, circle, alpha);
             var share = Share(content);
-            if (share >= 0)
-                style.DrawRing(g, circle, share, alpha);
-            style.DrawPlay(g, circle, alpha);
+            if (Avatar is { } avatar)
+            {
+                style.DrawAvatar(g, circle, avatar, AvatarFrame, alpha);
+                if (share >= 0)
+                    style.DrawEdgeRing(g, circle, share, alpha);
+            }
+            else
+            {
+                OverlayStyle.FillCircle(g, circle, alpha);
+                if (share >= 0)
+                    style.DrawRing(g, circle, share, alpha);
+                style.DrawPlay(g, circle, alpha);
+            }
 
             g.Restore(state);
 

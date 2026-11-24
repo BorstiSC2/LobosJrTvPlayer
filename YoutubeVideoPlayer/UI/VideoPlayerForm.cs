@@ -33,6 +33,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly IReadOnlyList<IVoteDisplay> _voteDisplays;
         private readonly NowPlayingSchedule _nowPlaying;
         private readonly bool _ownsNowPlaying;
+        private readonly AvatarSet _avatars;
 
         private readonly VideoView _videoView;
         private readonly Panel _controlPanel;
@@ -64,6 +65,7 @@ namespace YouTubeVideoPlayer.UI
         // What the strip at the bottom left should show. It is only handed to the strip once the card in the same place
         // is gone, so the two never overlap (see ApplyStrip).
         private string _statusText = string.Empty;
+        private AnimatedAvatar? _statusAvatar;
         private TickerContent? _ticker;
         private bool _isBuffering;
         private bool _updatingVolumeSlider;
@@ -85,9 +87,11 @@ namespace YouTubeVideoPlayer.UI
             string twitchBotName = "",
             AutoVoteManager? autoVote = null,
             IReadOnlyList<IVoteDisplay>? voteDisplays = null,
-            NowPlayingSchedule? nowPlaying = null)
+            NowPlayingSchedule? nowPlaying = null,
+            AvatarSet? avatars = null)
         {
             _autoVote = autoVote;
+            _avatars = avatars ?? AvatarSet.None;
             _ownsNowPlaying = nowPlaying == null;
             _nowPlaying = nowPlaying ?? new NowPlayingSchedule(playback);
             _voteDisplays = voteDisplays ?? Array.Empty<IVoteDisplay>();
@@ -113,7 +117,7 @@ namespace YouTubeVideoPlayer.UI
             Controls.Add(_videoView);
 
             // Now and then the video that plays: slides in at the bottom left, behind the strip.
-            _nowPlayingCard = new NowPlayingCard();
+            _nowPlayingCard = new NowPlayingCard { NextAvatar = _avatars.NextCurrent };
             Controls.Add(_nowPlayingCard);
             _nowPlayingCard.BringToFront();
 
@@ -126,6 +130,10 @@ namespace YouTubeVideoPlayer.UI
             _bufferingLabel = CreateOverlayPill("buffering", OverlayStyle.BufferingGlyph, "Buffering", animated: true);
             _waitingLabel = CreateOverlayPill("waiting", OverlayStyle.WaitingGlyph, "Waiting for vote to finish...", animated: false);
             _resumeLabel = CreateOverlayPill("resume", OverlayStyle.ConnectionLostGlyph, "Connection lost - resuming", animated: true);
+            // The wolf that waits: buffering, waiting for a vote, a lost connection and a reload (the volume keeps its icon).
+            _bufferingLabel.Avatar = _avatars.Waiting;
+            _waitingLabel.Avatar = _avatars.Waiting;
+            _resumeLabel.Avatar = _avatars.Waiting;
 
             // While the next video waits for a vote, the time left counts down once a second.
             _waitingCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -388,9 +396,12 @@ namespace YouTubeVideoPlayer.UI
         /// Shows a status text in the strip (empty hides it). During a vote it is kept behind the ticker and comes back
         /// afterwards. The video's own title is on the "now playing" card instead.
         /// </summary>
-        private void ShowTitle(string text)
+        private void ShowTitle((string Text, AnimatedAvatar? Avatar) status) => ShowTitle(status.Text, status.Avatar);
+
+        private void ShowTitle(string text, AnimatedAvatar? avatar = null)
         {
             _statusText = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
+            _statusAvatar = avatar;
             UpdateTitleLabelPosition();
             UpdateNowPlayingCard();
             ApplyStrip();
@@ -410,7 +421,10 @@ namespace YouTubeVideoPlayer.UI
                 return;
 
             _titleStrip.Title = _statusText;
+            _titleStrip.TitleAvatar = _statusAvatar;
             _titleStrip.Ticker = _ticker;
+            if (_ticker != null)
+                _titleStrip.TickerAvatar = _avatars.ForVote(_ticker.Ending); // kept while the ticker fades out
         }
 
         private void OnNowPlayingCardVisibleChanged(object? sender, EventArgs e)
@@ -496,7 +510,7 @@ namespace YouTubeVideoPlayer.UI
 
         #region Manager events
 
-        private void OnLoadingStarted(object? sender, EventArgs e) => ShowTitle("Loading next video...");
+        private void OnLoadingStarted(object? sender, EventArgs e) => ShowTitle("Loading next video...", _avatars.Waiting);
 
         private void OnPlaybackStateChanged(object? sender, EventArgs e)
         {
@@ -504,7 +518,9 @@ namespace YouTubeVideoPlayer.UI
             UpdateWaitingDisplay();
             UpdateOverlayLabels();
             if (_playback.IsStandby)
-                ShowTitle(_playback.IsStandbyReady ? "Ready - press Play to start" : "Loading first video...");
+                ShowTitle(_playback.IsStandbyReady
+                    ? ("Ready - press Play to start", _avatars.Ok)
+                    : ("Loading first video...", _avatars.Waiting));
             UpdateNowPlayingCard();
         }
 

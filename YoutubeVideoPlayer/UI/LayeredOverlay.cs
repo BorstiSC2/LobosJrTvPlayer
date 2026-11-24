@@ -23,6 +23,11 @@ namespace YouTubeVideoPlayer.UI
     /// (or with <c>layered: false</c>) the window cannot be created as layered; it is then created as a normal window that
     /// paints the same frame on black. Like any hidden child control, the window is only created when it first shows.
     /// </para>
+    /// <para>
+    /// An overlay may show an <see cref="Avatar"/> (an animated GIF in its circle). While it is visible and the avatar has
+    /// more than one frame, a <see cref="FrameClock"/> runs and the overlay is presented again whenever the avatar's frame
+    /// changes (on the injected <see cref="TimeProvider"/>); it stops when the overlay is hidden.
+    /// </para>
     /// </remarks>
     public abstract class LayeredOverlay : Control
     {
@@ -38,10 +43,18 @@ namespace YouTubeVideoPlayer.UI
         private IntPtr _oldBitmap;
         private Bitmap? _frame;
 
+        private readonly TimeProvider _animationTime;
+        private AnimatedAvatar? _avatar;
+        private long _avatarStart;
+        private int _avatarFrameShown = -1;
+        private FrameClock? _avatarClock;
+
         /// <param name="layered"><c>false</c> makes a normal window, as where Windows does not allow a layered one.</param>
-        protected LayeredOverlay(bool layered)
+        /// <param name="animationTime">The clock the avatar plays on; <see cref="TimeProvider.System"/> by default.</param>
+        protected LayeredOverlay(bool layered, TimeProvider? animationTime = null)
         {
             _layered = layered;
+            _animationTime = animationTime ?? TimeProvider.System;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
             SetStyle(ControlStyles.Selectable, false);
             Visible = false;
@@ -49,6 +62,63 @@ namespace YouTubeVideoPlayer.UI
 
         /// <summary>Whether the window is layered (see-through); false where Windows does not allow it.</summary>
         internal bool IsLayered => _layered && IsHandleCreated;
+
+        /// <summary>The animated picture in the circle; <c>null</c> draws the icon. A new one starts from its first frame.</summary>
+        [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        internal AnimatedAvatar? Avatar
+        {
+            get => _avatar;
+            set
+            {
+                if (ReferenceEquals(value, _avatar))
+                    return;
+
+                _avatar = value;
+                _avatarStart = _animationTime.GetTimestamp();
+                UpdateAvatarClock();
+                Present();
+            }
+        }
+
+        /// <summary>The avatar's frame for now.</summary>
+        private protected int AvatarFrame => _avatar?.FrameIndex(_animationTime.GetElapsedTime(_avatarStart)) ?? 0;
+
+        internal bool IsAvatarClockRunning => _avatarClock?.IsRunning == true;
+
+        /// <summary>The avatar frame of the last presented picture (tests).</summary>
+        internal int ShownAvatarFrame => _avatarFrameShown;
+
+        /// <summary>Presents again if the avatar has moved on to another frame. The clock calls it; tests call it themselves.</summary>
+        internal void TickAvatar()
+        {
+            if (_avatar != null && AvatarFrame != _avatarFrameShown)
+                Present();
+        }
+
+        private void UpdateAvatarClock()
+        {
+            var run = Visible && !IsDisposed && _avatar is { IsAnimated: true };
+            if (run)
+            {
+                _avatarClock ??= new FrameClock(_ =>
+                {
+                    TickAvatar();
+                    if (!IsLayered)
+                        Update();
+                });
+                _avatarClock.Start();
+            }
+            else
+            {
+                _avatarClock?.Stop();
+            }
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            UpdateAvatarClock();
+        }
 
         /// <summary>The look, for this display's DPI.</summary>
         private protected OverlayStyle Style => _style ??= new OverlayStyle(DeviceDpi);
@@ -78,6 +148,7 @@ namespace YouTubeVideoPlayer.UI
             if (_frame == null || _frame.Width != width || _frame.Height != height)
                 CreateFrame(width, height);
 
+            _avatarFrameShown = AvatarFrame;
             using (var g = Graphics.FromImage(_frame!))
             {
                 g.Clear(Color.Transparent);
@@ -200,6 +271,8 @@ namespace YouTubeVideoPlayer.UI
         {
             if (disposing)
             {
+                _avatarClock?.Dispose();
+                _avatarClock = null;
                 _style?.Dispose();
                 _style = null;
             }

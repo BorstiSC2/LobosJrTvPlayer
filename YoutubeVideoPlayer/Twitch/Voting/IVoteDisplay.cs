@@ -27,8 +27,13 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     /// <param name="TimeLeft">The time left; <c>null</c> while it is not known yet (the options are still being posted).</param>
     /// <param name="Subject">For a skip vote: the (shortened) title of the video it is about.</param>
     /// <param name="Required">For a skip vote: the <c>!skip</c> votes it needs.</param>
+    /// <param name="Ending">
+    /// The vote is in its last part: from the moment its last warning ("1 minute left! ...") is posted in chat; a vote too
+    /// short for a warning from halfway on.
+    /// </param>
     public sealed record VoteDisplay(
-        VoteKind Kind, IReadOnlyList<VoteDisplayOption> Options, TimeSpan? TimeLeft, string? Subject = null, int? Required = null);
+        VoteKind Kind, IReadOnlyList<VoteDisplayOption> Options, TimeSpan? TimeLeft, string? Subject = null, int? Required = null,
+        bool Ending = false);
 
     /// <summary>A vote the UI can show (implemented by <see cref="SkipVoteManager"/> and <see cref="VoteSkipManager"/>).</summary>
     /// <remarks>Read on the UI thread; <see cref="DisplayChanged"/> is raised there.</remarks>
