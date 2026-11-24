@@ -16,9 +16,9 @@ public class TitleStripTests
     {
         private readonly Form _form = new() { Width = 800, Height = 400 };
 
-        public Host()
+        public Host(bool layered = true)
         {
-            Strip = new TitleStrip(Time) { FrameRate = 60 };
+            Strip = new TitleStrip(Time, layered) { FrameRate = 60 };
             _form.Controls.Add(Strip);
             _form.ShowHidden();
             Strip.AvailableWidth = Available;
@@ -62,7 +62,7 @@ public class TitleStripTests
     }
 
     [Fact]
-    public void Title_GrowsFromNothing_ToTheWidthOfItsText() => UiContext.Run(() =>
+    public void Title_FadesIn_AtTheWidthOfItsText_TogetherWithThePill() => UiContext.Run(() =>
     {
         using var host = new Host();
         Assert.False(host.Strip.Visible);
@@ -71,11 +71,17 @@ public class TitleStripTests
         Assert.True(host.Strip.Visible);
         Assert.True(host.Strip.IsAnimating);
 
+        host.Run(TimeSpan.FromMilliseconds(70));
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width); // no growing from nothing
+        Assert.InRange(host.Strip.BoxAlpha, 0.2, 0.8);
+        Assert.Equal(host.Strip.BoxAlpha, host.Strip.ContentAlpha, 6); // the pill and the text together
+
         host.Finish();
 
         Assert.Equal(Content.Title, host.Strip.Shown);
         Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
         Assert.Equal(1, host.Strip.ContentAlpha);
+        Assert.Equal(1, host.Strip.BoxAlpha);
         Assert.False(host.Strip.IsAnimating);
         Assert.False(host.Strip.IsClockRunning);
         AssertAnchored(host.Strip);
@@ -294,14 +300,18 @@ public class TitleStripTests
     }, sta: true);
 
     [Fact]
-    public void WithoutAnyText_TheStripShrinksAndHides() => UiContext.Run(() =>
+    public void WithoutAnyText_ThePillFadesOutWithItsText_AndHides() => UiContext.Run(() =>
     {
         using var host = new Host();
         host.ShowTitle("Some video");
+        var width = host.Strip.Width;
 
         host.Strip.Title = string.Empty;
-        host.Run(TimeSpan.FromMilliseconds(100));
+        host.Run(TimeSpan.FromMilliseconds(70));
         Assert.True(host.Strip.Visible);
+        Assert.Equal(width, host.Strip.Width); // it does not shrink: everything fades out in place ...
+        Assert.InRange(host.Strip.BoxAlpha, 0.2, 0.8);
+        Assert.Equal(host.Strip.BoxAlpha, host.Strip.ContentAlpha, 6); // ... and at the same pace
 
         host.Finish();
 
@@ -322,6 +332,54 @@ public class TitleStripTests
         host.Finish();
 
         Assert.Equal(0, host.Strip.Width);
+        Assert.False(host.Strip.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void ItIsAPillOfTheCardsHeight_WithTheTextRightOfTheCircle() => UiContext.Run(() =>
+    {
+        using var host = new Host();
+        host.ShowTitle("Some video");
+        var card = new NowPlayingCard();
+        host.Strip.Parent!.Controls.Add(card);
+
+        Assert.Equal(card.CardHeight, host.Strip.Height); // the card and the strip share the place
+        Assert.True(host.Strip.TitleWidth("Some video") > host.Strip.Height); // circle, text, round end
+    }, sta: true);
+
+    [Fact]
+    public void WithoutALayeredWindow_ItAnimatesTheSame() => UiContext.Run(() =>
+    {
+        using var host = new Host(layered: false);
+
+        host.ShowTitle("Some video");
+        Assert.False(host.Strip.IsLayered);
+        Assert.Equal(host.Strip.TitleWidth("Some video"), host.Strip.Width);
+
+        host.Strip.Ticker = Ticker("VOTE NOW!");
+        host.Finish();
+        Assert.Equal(Content.Ticker, host.Strip.Shown);
+        Assert.Equal(Available, host.Strip.Width);
+        Assert.True(host.Strip.ScrollOffset > 0);
+    }, sta: true);
+
+    [Fact]
+    public void ATickerThatEnds_FadesOutWithItsPill_EvenHalfwayThroughACrossFade() => UiContext.Run(() =>
+    {
+        using var host = new Host();
+        host.ShowTitle("Some video");
+        host.Strip.Ticker = Ticker("VOTE NOW!");
+        host.Run(TimeSpan.FromMilliseconds(70)); // the title is half faded out, the pill is still there
+
+        host.Strip.Ticker = null;
+        host.Strip.Title = string.Empty;
+        host.Run(TimeSpan.FromMilliseconds(70));
+        Assert.True(host.Strip.BoxAlpha > 0);
+        Assert.True(host.Strip.ContentAlpha <= host.Strip.BoxAlpha);
+
+        host.Finish();
+        Assert.Equal(0, host.Strip.BoxAlpha);
+        Assert.Equal(0, host.Strip.ContentAlpha);
         Assert.False(host.Strip.Visible);
     }, sta: true);
 }

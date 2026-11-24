@@ -16,7 +16,9 @@ public class AutoVoteManagerTests
     /// <summary>An autovote on top of a real vote manager; the player is a substitute whose position the test sets.</summary>
     private sealed class Setup : IDisposable
     {
-        public Setup(TimeSpan? voteDuration = null, bool connected = true, TimeSpan? leadTime = null, Func<bool>? isOtherVoteRunning = null)
+        public Setup(
+            TimeSpan? voteDuration = null, bool connected = true, TimeSpan? leadTime = null, Func<bool>? isOtherVoteRunning = null,
+            TimeSpan? autoVoteDuration = null)
         {
             Chat = TestSupport.Chat.Channel(out var sent);
             Sent = sent;
@@ -35,7 +37,7 @@ public class AutoVoteManagerTests
 
             Votes = new SkipVoteManager(
                 Chat, Playback, Videos, YouTube, voteDuration ?? TimeSpan.FromMinutes(2), SkipVoteManager.OptionCount, Time, new Random(1));
-            AutoVote = new AutoVoteManager(Chat, Playback, Votes, Time, leadTime, isOtherVoteRunning);
+            AutoVote = new AutoVoteManager(Chat, Playback, Votes, Time, leadTime, isOtherVoteRunning, autoVoteDuration);
         }
 
         public FakeTimeProvider Time { get; } = new();
@@ -125,9 +127,9 @@ public class AutoVoteManagerTests
     });
 
     [Fact]
-    public void ByDefault_TheVoteStartsFiveMinutesBeforeTheEnd() => UiContext.Run(() =>
+    public void ByDefault_TheVoteStarts400SecondsBeforeTheEnd() => UiContext.Run(() =>
     {
-        Assert.Equal(TimeSpan.FromMinutes(5), AutoVoteManager.DefaultLeadTime);
+        Assert.Equal(TimeSpan.FromSeconds(400), AutoVoteManager.DefaultLeadTime);
         using var setup = new Setup();
         Assert.Equal(AutoVoteManager.DefaultLeadTime, setup.AutoVote.LeadTime);
     });
@@ -165,17 +167,17 @@ public class AutoVoteManagerTests
     }
 
     [Fact]
-    public void NoVoteWhileMoreThanFiveMinutesAreLeft_ThenAVoteStartsAtFiveMinutes() => UiContext.Run(async () =>
+    public void NoVoteWhileMoreThanTheLeadTimeIsLeft_ThenAVoteStartsAtTheLeadTime() => UiContext.Run(async () =>
     {
         using var setup = new Setup();
         setup.AutoVote.Enabled = true;
 
-        setup.Remaining(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        setup.Remaining(AutoVoteManager.DefaultLeadTime + TimeSpan.FromSeconds(1));
         await setup.TickAsync();
         Assert.False(setup.Votes.IsRunning);
         Assert.Empty(setup.Sent);
 
-        setup.Remaining(TimeSpan.FromMinutes(5));
+        setup.Remaining(AutoVoteManager.DefaultLeadTime);
         await setup.TickAsync();
         await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
 
@@ -453,5 +455,26 @@ public class AutoVoteManagerTests
         await setup.TickAsync();
 
         Assert.False(setup.Votes.IsRunning);
+    });
+
+    [Fact]
+    public void ItsOwnVoteDuration_IsUsed_NotTheOneOfAModeratorsVote() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup(voteDuration: TimeSpan.FromMinutes(2), autoVoteDuration: TimeSpan.FromSeconds(75));
+        setup.Remaining(TimeSpan.FromMinutes(5));
+
+        setup.AutoVote.Enabled = true;
+        await Async.WaitUntilAsync(() => setup.Votes.IsRunning && setup.Sent.Count > 0);
+
+        Assert.Equal(TimeSpan.FromSeconds(75), setup.AutoVote.VoteDuration);
+        Assert.Contains("Voting ends 75 seconds after the last option.", setup.Sent[0]);
+    });
+
+    [Fact]
+    public void WithoutItsOwnVoteDuration_ItUsesTheVoteManagers() => UiContext.Run(() =>
+    {
+        using var setup = new Setup(voteDuration: TimeSpan.FromSeconds(50));
+
+        Assert.Equal(TimeSpan.FromSeconds(50), setup.AutoVote.VoteDuration);
     });
 }

@@ -81,8 +81,9 @@ public class PlaylistSwapEndToEndTests
         var first = Assert.Single(Played());
         Assert.StartsWith("a", first);
 
-        // The swap falls due 10 minutes into the video. It plays on, and 5½ minutes before its end Beta takes over.
-        await StepAsync(TimeSpan.FromMinutes(14));
+        // The swap falls due 10 minutes into the video. It plays on, and 7:10 before its end (the autovote's lead time of
+        // 400 s and half a minute) Beta takes over.
+        await StepAsync(TimeSpan.FromMinutes(12));
         Assert.True(manager.IsSwapDue);
         Assert.Equal(IdA, manager.SelectedKey);
         await StepUntilAsync(() => manager.SelectedKey == IdB, TimeSpan.FromSeconds(5), 20, "Beta should take over before the end");
@@ -90,7 +91,7 @@ public class PlaylistSwapEndToEndTests
         Assert.Equal(new[] { first }, Played()); // not skipped
         Assert.DoesNotContain(sent, m => m.StartsWith("New Playlist"));
 
-        // Five minutes before the end the autovote starts: its options come from Beta.
+        // 400 seconds before the end the autovote starts: its options come from Beta.
         await StepUntilAsync(() => votes.IsRunning, TimeSpan.FromSeconds(5), 20, "the autovote should start");
         await StepUntilAsync(() => sent.Count(m => m.Contains("– vote with !vote")) == 3, TimeSpan.FromSeconds(1), 20, "all options should be posted");
         var options = sent.Where(m => m.Contains("– vote with !vote")).ToList();

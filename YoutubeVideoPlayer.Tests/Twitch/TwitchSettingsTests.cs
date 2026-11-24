@@ -75,12 +75,14 @@ public class TwitchSettingsTests
         Assert.Equal(5, c.ModVodCommands);
         Assert.Equal(5, c.CommandHelp);
 
-        Assert.Equal(120, settings.NextVideoVote.DurationSeconds);
-        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds);
-        Assert.Equal(300, settings.AutoVote.LeadTimeSeconds);
-        Assert.Equal(60, settings.VoteSkip.DurationSeconds);
-        Assert.Equal(75, settings.VoteSkip.RequiredPercent);
+        Assert.Equal(120, settings.ForceVoteSkip.DurationSeconds);
+        Assert.Equal(45, settings.Revote.DurationSeconds);
+        Assert.Equal(400, settings.AutoVote.LeadTimeSeconds);
+        Assert.Equal(300, settings.AutoVote.DurationSeconds);
+        Assert.Equal(120, settings.VoteSkip.DurationSeconds);
+        Assert.Equal(65, settings.VoteSkip.RequiredPercent);
         Assert.Equal(30, settings.VoteSkip.CooldownMinutes);
+        Assert.Equal(120, settings.VoteSkip.NextVideoVoteDurationSeconds);
         Assert.Equal(60, settings.ChatterAverage.WindowMinutes);
         Assert.Equal(5, settings.ChatterAverage.BucketMinutes);
     }
@@ -98,12 +100,18 @@ public class TwitchSettingsTests
     [InlineData("chatterAverage", "windowMinutes", 1, 5)]
     [InlineData("chatterAverage", "windowMinutes", 30, 30)]
     [InlineData("chatterAverage", "windowMinutes", 99999, 1440)]
-    [InlineData("nextVideoVote", "durationSeconds", 1, 15)]
-    [InlineData("nextVideoVote", "durationSeconds", 120, 120)]
-    [InlineData("nextVideoVote", "durationSeconds", 99999, 1800)]
-    [InlineData("nextVideoVote", "revoteDurationSeconds", 1, 15)]
-    [InlineData("nextVideoVote", "revoteDurationSeconds", 30, 30)]
-    [InlineData("nextVideoVote", "revoteDurationSeconds", 99999, 600)]
+    [InlineData("forceVoteSkip", "durationSeconds", 1, 15)]
+    [InlineData("forceVoteSkip", "durationSeconds", 120, 120)]
+    [InlineData("forceVoteSkip", "durationSeconds", 99999, 1800)]
+    [InlineData("revote", "durationSeconds", 1, 15)]
+    [InlineData("revote", "durationSeconds", 30, 30)]
+    [InlineData("revote", "durationSeconds", 99999, 600)]
+    [InlineData("autoVote", "durationSeconds", 1, 15)]
+    [InlineData("autoVote", "durationSeconds", 90, 90)]
+    [InlineData("autoVote", "durationSeconds", 99999, 1800)]
+    [InlineData("voteSkip", "nextVideoVoteDurationSeconds", 1, 15)]
+    [InlineData("voteSkip", "nextVideoVoteDurationSeconds", 90, 90)]
+    [InlineData("voteSkip", "nextVideoVoteDurationSeconds", 99999, 1800)]
     [InlineData("autoVote", "leadTimeSeconds", 1, 60)]
     [InlineData("autoVote", "leadTimeSeconds", 420, 420)]
     [InlineData("autoVote", "leadTimeSeconds", 99999, 3600)]
@@ -122,9 +130,11 @@ public class TwitchSettingsTests
             ("voteSkip", "cooldownMinutes") => settings.VoteSkip.CooldownMinutes,
             ("voteSkip", "requiredPercent") => settings.VoteSkip.RequiredPercent,
             ("voteSkip", "durationSeconds") => settings.VoteSkip.DurationSeconds,
+            ("voteSkip", "nextVideoVoteDurationSeconds") => settings.VoteSkip.NextVideoVoteDurationSeconds,
             ("chatterAverage", "windowMinutes") => settings.ChatterAverage.WindowMinutes,
-            ("nextVideoVote", "revoteDurationSeconds") => settings.NextVideoVote.RevoteDurationSeconds,
-            ("nextVideoVote", _) => settings.NextVideoVote.DurationSeconds,
+            ("revote", _) => settings.Revote.DurationSeconds,
+            ("forceVoteSkip", _) => settings.ForceVoteSkip.DurationSeconds,
+            ("autoVote", "durationSeconds") => settings.AutoVote.DurationSeconds,
             ("autoVote", _) => settings.AutoVote.LeadTimeSeconds,
             (_, "voteInfo") => settings.CommandCooldownSeconds.VoteInfo,
             (_, "current") => settings.CommandCooldownSeconds.Current,
@@ -181,9 +191,13 @@ public class TwitchSettingsTests
         Assert.True(settings.IsComplete);
         Assert.True(settings.UsesAppSignIn);
         Assert.Equal(2, settings.PrivilegedUsers.Count);
-        Assert.Equal(300, settings.AutoVote.LeadTimeSeconds);
-        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds);
-        Assert.Equal(before, File.ReadAllBytes(path)); // already the current version: nothing to migrate
+        Assert.Equal(400, settings.AutoVote.LeadTimeSeconds);
+        Assert.Equal(300, settings.AutoVote.DurationSeconds);
+        Assert.Equal(120, settings.VoteSkip.DurationSeconds);
+        Assert.Equal(65, settings.VoteSkip.RequiredPercent);
+        Assert.Equal(45, settings.Revote.DurationSeconds);
+        Assert.Equal(120, settings.VoteSkip.NextVideoVoteDurationSeconds);
+        Assert.Equal(before, File.ReadAllBytes(path)); // current and complete: nothing to migrate or to add
         Assert.Single(Directory.GetFiles(dir.Path));
     }
 
@@ -227,6 +241,8 @@ public class TwitchSettingsTests
         Assert.Equal(2, (int)written["version"]!);
         Assert.Equal("LobosBot", (string)written["signIn"]!["botLogin"]!); // values are copied as they were
         Assert.Null(written["botUsername"]);
+        Assert.Equal(45, (int)written["revote"]!["durationSeconds"]!); // new in version 2: added with its default
+        AssertEverySetting(written);
         AssertMigratedValues(settings);
 
         // The new file loads to the same settings, without another migration.
@@ -260,12 +276,16 @@ public class TwitchSettingsTests
         Assert.Equal(7, c.ModVodCommands);
         Assert.Equal(7, c.CommandHelp);
 
-        Assert.Equal(90, settings.NextVideoVote.DurationSeconds);
-        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds); // new in version 2: no old key, the default
-        Assert.Equal(240, settings.AutoVote.LeadTimeSeconds);
-        Assert.Equal(45, settings.VoteSkip.DurationSeconds);
-        Assert.Equal(60, settings.VoteSkip.RequiredPercent);
+        Assert.Equal(90, settings.ForceVoteSkip.DurationSeconds); // skipVoteDurationSeconds: !forcevoteskip keeps it
+        Assert.Equal(45, settings.Revote.DurationSeconds); // new in version 2: no old key, the default
         Assert.Equal(20, settings.VoteSkip.CooldownMinutes);
+
+        // New timings in version 2, whatever version 1 said (240, 45 and 60 there).
+        Assert.Equal(400, settings.AutoVote.LeadTimeSeconds);
+        Assert.Equal(300, settings.AutoVote.DurationSeconds);
+        Assert.Equal(120, settings.VoteSkip.DurationSeconds);
+        Assert.Equal(65, settings.VoteSkip.RequiredPercent);
+        Assert.Equal(120, settings.VoteSkip.NextVideoVoteDurationSeconds);
         Assert.Equal(30, settings.ChatterAverage.WindowMinutes);
         Assert.Equal(3, settings.ChatterAverage.BucketMinutes);
     }
@@ -318,5 +338,64 @@ public class TwitchSettingsTests
         Assert.Equal(600, settings.AutoVote.LeadTimeSeconds);
         Assert.Equal(json, File.ReadAllText(path));
         Assert.Single(Directory.GetFiles(dir.Path));
+    }
+
+    /// <summary>The file has every setting the app knows, in the order of the example file.</summary>
+    private static void AssertEverySetting(Newtonsoft.Json.Linq.JObject written)
+    {
+        static IEnumerable<string> Keys(Newtonsoft.Json.Linq.JObject json, string prefix = "") =>
+            json.Properties().SelectMany(p => p.Value is Newtonsoft.Json.Linq.JObject section
+                ? new[] { prefix + p.Name }.Concat(Keys(section, prefix + p.Name + "."))
+                : new[] { prefix + p.Name });
+
+        var defaults = Keys(TwitchSettings.DefaultJson()).ToList();
+        Assert.Equal(defaults, Keys(written).Take(defaults.Count));
+    }
+
+    [Fact]
+    public void Load_OfACurrentFileWithMissingSettings_WritesThemWithTheirDefaults_WithoutABackup()
+    {
+        using var dir = new TempDirectory();
+        var path = dir.File(TwitchSettings.FileName);
+        File.WriteAllText(path, """
+            { "version": 2, "channel": "LobosJr", "autoVote": { "leadTimeSeconds": 600 }, "_note": "mine" }
+            """);
+
+        var settings = TwitchSettings.Load(dir.Path)!;
+
+        var written = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(path));
+        AssertEverySetting(written);
+        Assert.Equal("LobosJr", (string)written["channel"]!); // the file's values stay as they were (not normalized)
+        Assert.Equal(600, (int)written["autoVote"]!["leadTimeSeconds"]!);
+        Assert.Equal(300, (int)written["autoVote"]!["durationSeconds"]!);
+        Assert.Equal("mine", (string)written["_note"]!);
+        Assert.Equal("_note", written.Properties().Last().Name);
+        Assert.Equal(600, settings.AutoVote.LeadTimeSeconds);
+        Assert.Single(Directory.GetFiles(dir.Path)); // nothing is lost, so no backup
+
+        var before = File.ReadAllBytes(path);
+        TwitchSettings.Load(dir.Path);
+        Assert.Equal(before, File.ReadAllBytes(path)); // complete now: not written again
+    }
+
+    [Fact]
+    public void Load_OfACurrentFileThatCannotBeWritten_UsesTheDefaults_AndLeavesTheFile()
+    {
+        using var dir = new TempDirectory();
+        var path = dir.File(TwitchSettings.FileName);
+        const string json = """{ "version": 2, "channel": "lobosjr" }""";
+        File.WriteAllText(path, json);
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            var settings = TwitchSettings.Load(dir.Path)!;
+
+            Assert.Equal(300, settings.AutoVote.DurationSeconds);
+            Assert.Equal(json, File.ReadAllText(path));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
     }
 }

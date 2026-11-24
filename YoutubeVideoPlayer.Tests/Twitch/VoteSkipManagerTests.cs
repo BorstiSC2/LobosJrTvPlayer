@@ -46,7 +46,17 @@ public class VoteSkipManagerTests
 
         public SkipVoteManager Votes { get; }
 
-        public VoteSkipManager VoteSkip { get; }
+        public VoteSkipManager VoteSkip { get; private set; }
+
+        /// <summary>Gives the vote for the next video after a won vote-skip its own length.</summary>
+        public void UseNextVideoVoteDuration(TimeSpan duration)
+        {
+            VoteSkip.Dispose();
+            VoteSkip = new VoteSkipManager(Chat, Playback, Votes, () => Average, Duration, Cooldown, 75, Time)
+            {
+                NextVideoVoteDuration = duration
+            };
+        }
 
         /// <summary>The rolling average of unique chatters the manager sees.</summary>
         public double Average { get; set; } = 4; // 75 % → 3 votes
@@ -637,4 +647,19 @@ public class VoteSkipManagerTests
     });
 
     #endregion
+
+    [Fact]
+    public void SkipWins_TheVoteForTheNextVideo_RunsItsOwnLength() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.UseNextVideoVoteDuration(TimeSpan.FromSeconds(45));
+        setup.Start("viewer");
+        setup.Skip("b");
+        setup.Skip("c");
+
+        await setup.FinishAsync();
+        await Async.WaitUntilAsync(() => setup.Sent.Any(m => m.StartsWith("Vote for the next video!")));
+
+        Assert.Contains(setup.Sent, m => m.StartsWith("Vote for the next video!") && m.Contains("Voting ends 45 seconds after the last option."));
+    });
 }

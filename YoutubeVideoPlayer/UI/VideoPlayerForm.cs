@@ -38,7 +38,7 @@ namespace YouTubeVideoPlayer.UI
         private readonly Panel _controlPanel;
         private readonly TitleStrip _titleStrip;
         private readonly NowPlayingCard _nowPlayingCard;
-        private readonly Label _volumeLabel;
+        private readonly OverlayPill _volumeLabel;
         private readonly OverlayPill _bufferingLabel;
         private readonly OverlayPill _waitingLabel;
         private readonly OverlayPill _resumeLabel;
@@ -57,6 +57,14 @@ namespace YouTubeVideoPlayer.UI
         private readonly System.Windows.Forms.Timer _voteTickerTimer;
         private readonly System.Windows.Forms.Timer _nowPlayingTimer;
         private bool _showingWaiting;
+
+        // A vote runs (also one that still looks up its options and is not shown yet): it has the card's place.
+        private bool _voteRunning;
+
+        // What the strip at the bottom left should show. It is only handed to the strip once the card in the same place
+        // is gone, so the two never overlap (see ApplyStrip).
+        private string _statusText = string.Empty;
+        private TickerContent? _ticker;
         private bool _isBuffering;
         private bool _updatingVolumeSlider;
         private bool _playlistDialogOpen;
@@ -113,7 +121,7 @@ namespace YouTubeVideoPlayer.UI
             _titleStrip = new TitleStrip();
             Controls.Add(_titleStrip);
             _titleStrip.BringToFront();
-            _volumeLabel = CreateOverlayLabel(100, 40, 10, ContentAlignment.MiddleCenter, AnchorStyles.Top | AnchorStyles.Right);
+            _volumeLabel = CreateOverlayPill("volume", OverlayStyle.VolumeGlyph, string.Empty, animated: false);
             // The labels in the middle of the video, in the style of the title strip.
             _bufferingLabel = CreateOverlayPill("buffering", OverlayStyle.BufferingGlyph, "Buffering", animated: true);
             _waitingLabel = CreateOverlayPill("waiting", OverlayStyle.WaitingGlyph, "Waiting for vote to finish...", animated: false);
@@ -269,6 +277,8 @@ namespace YouTubeVideoPlayer.UI
                 votes.DisplayChanged += OnVoteDisplayChanged;
 
             _nowPlaying.Changed += OnNowPlayingScheduleChanged;
+            _nowPlayingCard.VisibleChanged += OnNowPlayingCardVisibleChanged;
+            _titleStrip.VisibleChanged += OnTitleStripVisibleChanged;
         }
 
         /// <summary>The Autovote was switched by a chat command: show it in the checkbox.</summary>
@@ -294,32 +304,14 @@ namespace YouTubeVideoPlayer.UI
                 votes.DisplayChanged -= OnVoteDisplayChanged;
 
             _nowPlaying.Changed -= OnNowPlayingScheduleChanged;
+            _nowPlayingCard.VisibleChanged -= OnNowPlayingCardVisibleChanged;
+            _titleStrip.VisibleChanged -= OnTitleStripVisibleChanged;
 
             if (_twitch != null)
                 _twitch.StateChanged -= OnTwitchStateChanged;
         }
 
         #region Layout helpers
-
-        private Label CreateOverlayLabel(int width, int height, float fontSize, ContentAlignment alignment, AnchorStyles anchor)
-        {
-            var label = new Label
-            {
-                AutoSize = false,
-                Width = width,
-                Height = height,
-                BackColor = Color.FromArgb(200, 0, 0, 0),
-                ForeColor = Color.White,
-                TextAlign = alignment,
-                Padding = new Padding(0),
-                Visible = false,
-                Font = new Font(FontFamily.GenericSansSerif, fontSize, FontStyle.Bold),
-                Anchor = anchor
-            };
-            Controls.Add(label);
-            label.BringToFront();
-            return label;
-        }
 
         private Button AddControlButton(string text, EventHandler onClick)
         {
@@ -398,20 +390,61 @@ namespace YouTubeVideoPlayer.UI
         /// </summary>
         private void ShowTitle(string text)
         {
-            _titleStrip.Title = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
+            _statusText = string.IsNullOrWhiteSpace(text) ? string.Empty : text;
             UpdateTitleLabelPosition();
             UpdateNowPlayingCard();
+            ApplyStrip();
+        }
+
+        /// <summary>
+        /// The bottom left shows one thing at a time. The strip (a status text or a vote ticker) only gets its content once
+        /// the card is completely gone: a status text makes the card close at once, a vote waits until the card's time is
+        /// up. Called again when the card has disappeared.
+        /// </summary>
+        private void ApplyStrip()
+        {
+            if (IsDisposed || Disposing)
+                return;
+
+            if ((_ticker != null || _statusText.Length > 0) && _nowPlayingCard.Visible)
+                return;
+
+            _titleStrip.Title = _statusText;
+            _titleStrip.Ticker = _ticker;
+        }
+
+        private void OnNowPlayingCardVisibleChanged(object? sender, EventArgs e)
+        {
+            if (!_nowPlayingCard.Visible)
+                ApplyStrip();
+        }
+
+        private void OnTitleStripVisibleChanged(object? sender, EventArgs e)
+        {
+            if (!_titleStrip.Visible)
+                UpdateNowPlayingCard();
         }
 
         private void OnNowPlayingScheduleChanged(object? sender, EventArgs e) => UpdateNowPlayingCard();
 
         /// <summary>
-        /// The card is up while it is due, a video is there to show, and the strip in the same place is empty (no status
-        /// text, no vote ticker). Otherwise it slides out at once.
+        /// The card is up while it is due and a video is there to show. A status text takes its place at once. A vote that
+        /// starts while the card is up waits until the card's time is over (its ticker appears once the card is gone), and
+        /// no vote brings the card up (the schedule is <see cref="NowPlayingSchedule.Blocked"/> meanwhile). Otherwise the
+        /// card only appears once the strip in the same place is gone.
         /// </summary>
         private void UpdateNowPlayingCard()
         {
-            var show = _nowPlaying.IsShown && _nowPlaying.CanShow && _titleStrip.Ticker == null && _titleStrip.Title.Length == 0;
+            if (IsDisposed || Disposing)
+                return;
+
+            bool show;
+            if (!_nowPlaying.IsShown || !_nowPlaying.CanShow || _statusText.Length > 0)
+                show = false;
+            else if (_voteRunning)
+                show = _nowPlayingCard.Showing;
+            else
+                show = _nowPlayingCard.Showing || !_titleStrip.Visible;
             if (show)
             {
                 UpdateNowPlayingContent();
@@ -441,8 +474,17 @@ namespace YouTubeVideoPlayer.UI
         private void UpdateVoteTicker()
         {
             var display = _voteDisplays.Select(v => v.Display).FirstOrDefault(d => d != null);
-            _titleStrip.Ticker = display == null ? null : VoteTicker.From(display);
+            _voteRunning = display != null;
+            _nowPlaying.Blocked = _voteRunning;
+            if (display == null)
+                _ticker = null;
+            else if (VoteTicker.IsComplete(display))
+                _ticker = VoteTicker.From(display);
+            // Otherwise the vote is still looking up its options: it only shows once they are known. A ticker that is up
+            // (a won !voteskip that started this vote) stays until then, so the strip has no gap.
+
             UpdateNowPlayingCard();
+            ApplyStrip();
 
             if (display == null)
                 _voteTickerTimer.Stop();
@@ -606,9 +648,10 @@ namespace YouTubeVideoPlayer.UI
             }
         }
 
-        private void ShowVolumeDisplay(string text)
+        private void ShowVolumeDisplay()
         {
-            _volumeLabel.Text = text;
+            _volumeLabel.Icon = _playback.IsMuted ? OverlayStyle.MuteGlyph : OverlayStyle.VolumeGlyph;
+            _volumeLabel.Text = _playback.IsMuted ? "Muted" : $"Volume {_playback.Volume}%";
             _volumeLabel.Location = new Point(ClientSize.Width - _volumeLabel.Width - 10, 10);
             _volumeLabel.Visible = true;
             _volumeLabel.BringToFront();
@@ -733,16 +776,16 @@ namespace YouTubeVideoPlayer.UI
                 case Keys.Oemplus:
                 case Keys.Add:
                     _playback.AdjustVolume(VolumeStep);
-                    ShowVolumeDisplay($"Volume: {_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
                 case Keys.OemMinus:
                 case Keys.Subtract:
                     _playback.AdjustVolume(-VolumeStep);
-                    ShowVolumeDisplay($"Volume: {_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
                 case Keys.M:
                     _playback.ToggleMute();
-                    ShowVolumeDisplay(_playback.IsMuted ? "MUTE" : $"{_playback.Volume}%");
+                    ShowVolumeDisplay();
                     break;
             }
         }

@@ -4,13 +4,15 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json.Serialization;
 using YouTubeVideoPlayer.Infrastructure;
 
 namespace YouTubeVideoPlayer.Twitch
 {
     /// <summary>
     /// Bot credentials and options, read from <c>twitchsettings.json</c> next to the executable. A file of an older layout
-    /// is migrated (<see cref="TwitchSettingsMigration"/>) and written back; the original is kept as a backup.
+    /// is migrated (<see cref="TwitchSettingsMigration"/>) and written back; the original is kept as a backup. Settings
+    /// the file does not have are added with their defaults, so the file always shows every setting.
     /// </summary>
     public sealed class TwitchSettings
     {
@@ -36,20 +38,26 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>The minimum time between two uses of each command, to stay below Twitch's rate limits.</summary>
         public CommandCooldownSettings CommandCooldownSeconds { get; set; } = new();
 
-        /// <summary>The vote about the next video (<c>!forcevoteskip</c>, the Autovote, a successful <c>!voteskip</c>).</summary>
-        public NextVideoVoteSettings NextVideoVote { get; set; } = new();
+        /// <summary>The vote about the next video that a moderator starts with <c>!forcevoteskip</c>.</summary>
+        public ForceVoteSkipSettings ForceVoteSkip { get; set; } = new();
 
+        /// <summary>The vote about the video after the current one, shortly before it ends (the "Autovote" option).</summary>
         public AutoVoteSettings AutoVote { get; set; } = new();
 
         /// <summary>The viewers' vote to skip the current video (<c>!voteskip</c>, ballots <c>!skip</c> / <c>!stay</c>).</summary>
         public VoteSkipSettings VoteSkip { get; set; } = new();
 
+        /// <summary>The vote that repeats any of these votes when its winner could not be played.</summary>
+        public RevoteSettings Revote { get; set; } = new();
+
         /// <summary>The rolling average of unique chatters that <c>!voteskip</c> measures against.</summary>
         public ChatterAverageSettings ChatterAverage { get; set; } = new();
 
         /// <summary>The bot signs in through the app (device code flow) and renews its token automatically.</summary>
+        [JsonIgnore]
         public bool UsesAppSignIn => !string.IsNullOrWhiteSpace(SignIn.ClientId);
 
+        [JsonIgnore]
         public bool IsComplete =>
             Enabled
             && !string.IsNullOrWhiteSpace(Channel)
@@ -74,6 +82,7 @@ namespace YouTubeVideoPlayer.Twitch
             /// Manually created chat token (scopes <c>chat:read</c>, <c>chat:edit</c>). Only used when no
             /// <see cref="ClientId"/> is set; it is not renewed automatically.
             /// </summary>
+            [JsonProperty("oauthToken")]
             public string OAuthToken { get; set; } = string.Empty;
         }
 
@@ -139,37 +148,55 @@ namespace YouTubeVideoPlayer.Twitch
             }
         }
 
-        public sealed class NextVideoVoteSettings
+        public sealed class ForceVoteSkipSettings
         {
-            /// <summary>How long the vote runs (15 to 1800), counted from the moment the last option has been posted.</summary>
-            public int DurationSeconds { get; set; } = 120;
-
             /// <summary>
-            /// How long the vote runs that repeats a vote whose winner could not be played (15 to 600), counted like
-            /// <see cref="DurationSeconds"/>. Shorter, because a video the chat did not choose is playing meanwhile.
+            /// How long a vote started with <c>!forcevoteskip</c> runs (15 to 1800), counted from the moment the last option
+            /// has been posted.
             /// </summary>
-            public int RevoteDurationSeconds { get; set; } = 45;
+            public int DurationSeconds { get; set; } = 120;
+        }
+
+        public sealed class RevoteSettings
+        {
+            /// <summary>
+            /// How long the vote runs that repeats a vote whose winner could not be played (15 to 600), counted from the
+            /// moment the last option has been posted. Shorter, because a video the chat did not choose is playing meanwhile.
+            /// </summary>
+            public int DurationSeconds { get; set; } = 45;
         }
 
         public sealed class AutoVoteSettings
         {
             /// <summary>How long before the end of a video the Autovote starts its vote about the next one (60 to 3600).</summary>
-            public int LeadTimeSeconds { get; set; } = 300;
+            public int LeadTimeSeconds { get; set; } = 400;
+
+            /// <summary>
+            /// How long the Autovote's vote runs (15 to 1800), counted from the moment the last option has been posted. It
+            /// is shortened if the video would end first.
+            /// </summary>
+            public int DurationSeconds { get; set; } = 300;
         }
 
         public sealed class VoteSkipSettings
         {
             /// <summary>How long a <c>!voteskip</c> vote runs (15 to 600).</summary>
-            public int DurationSeconds { get; set; } = 60;
+            public int DurationSeconds { get; set; } = 120;
 
             /// <summary>
             /// The share of the average unique chatters (in percent, 1 to 100) that has to type <c>!skip</c> for the vote
             /// to succeed (besides more <c>!skip</c> than <c>!stay</c>).
             /// </summary>
-            public int RequiredPercent { get; set; } = 75;
+            public int RequiredPercent { get; set; } = 65;
 
             /// <summary>How long nobody can use <c>!voteskip</c> after a vote in which the chat chose to stay (1 to 1440).</summary>
             public int CooldownMinutes { get; set; } = 30;
+
+            /// <summary>
+            /// How long the vote for the next video runs that a won <c>!voteskip</c> starts (15 to 1800), counted from the
+            /// moment the last option has been posted.
+            /// </summary>
+            public int NextVideoVoteDurationSeconds { get; set; } = 120;
         }
 
         public sealed class ChatterAverageSettings
@@ -183,8 +210,11 @@ namespace YouTubeVideoPlayer.Twitch
 
         /// <summary>
         /// Loads the settings; returns <c>null</c> if the file is missing or cannot be read. A file of an older layout is
-        /// migrated and written back (the original is kept as <c>twitchsettings.v&lt;version&gt;.json.bak</c>); if that
-        /// fails, the migrated settings are used anyway and the migration runs again on the next start.
+        /// migrated and written back (the original is kept as <c>twitchsettings.v&lt;version&gt;.json.bak</c>). Settings the
+        /// file does not have (new ones, or ones the user removed) are added with their defaults
+        /// (<see cref="TwitchSettingsMigration.AddMissing"/>) and the file is written back too, so it always shows every
+        /// setting. If writing fails, the settings are used anyway and it is tried again on the next start. A file of a
+        /// newer version (a later app) is never written.
         /// </summary>
         /// <param name="baseDirectory">Folder containing the file; the application folder by default.</param>
         public static TwitchSettings? Load(string? baseDirectory = null)
@@ -211,9 +241,14 @@ namespace YouTubeVideoPlayer.Twitch
                     Logger.Log($"{FileName} has version {fromVersion}, written by a newer version of the app; " +
                                $"it is read as version {TwitchSettingsMigration.CurrentVersion} and not changed.");
                 }
-                else if (fromVersion < TwitchSettingsMigration.CurrentVersion)
+                else
                 {
-                    SaveMigrated(path, migrated, fromVersion);
+                    var added = new List<string>();
+                    migrated = TwitchSettingsMigration.AddMissing(migrated, DefaultJson(), added);
+                    if (fromVersion < TwitchSettingsMigration.CurrentVersion)
+                        SaveMigrated(path, migrated, fromVersion, added);
+                    else if (!JToken.DeepEquals(migrated, json))
+                        SaveCompleted(path, migrated, added);
                 }
 
                 var settings = migrated.ToObject<TwitchSettings>(JsonSerializer.CreateDefault()) ?? new TwitchSettings();
@@ -227,8 +262,18 @@ namespace YouTubeVideoPlayer.Twitch
             }
         }
 
+        /// <summary>
+        /// Every setting with its default, in the order of the file (the example file has the same): what
+        /// <see cref="TwitchSettingsMigration.AddMissing"/> fills a file up from.
+        /// </summary>
+        internal static JObject DefaultJson() =>
+            JObject.FromObject(new TwitchSettings(), JsonSerializer.Create(new JsonSerializerSettings
+            {
+                ContractResolver = new CamelCasePropertyNamesContractResolver()
+            }));
+
         /// <summary>Keeps the original next to it and writes the migrated file; a failure is only logged.</summary>
-        private static void SaveMigrated(string path, JObject migrated, int fromVersion)
+        private static void SaveMigrated(string path, JObject migrated, int fromVersion, IReadOnlyList<string> added)
         {
             var target = $"version {TwitchSettingsMigration.CurrentVersion}";
             try
@@ -236,20 +281,45 @@ namespace YouTubeVideoPlayer.Twitch
                 var backup = BackupPath(path, fromVersion);
                 File.Copy(path, backup); // the original bytes
                 JsonFile.WriteAtomic(path, migrated);
-                Logger.Log($"Migrated {FileName} from version {fromVersion} to {target}; the old file is kept as {Path.GetFileName(backup)}.");
+                Logger.Log($"Migrated {FileName} from version {fromVersion} to {target}; the old file is kept as {Path.GetFileName(backup)}." +
+                           Added(added));
             }
             catch (Exception ex)
             {
                 Logger.Log($"Could not write {FileName} migrated to {target}; the migrated settings are used for now, " +
                            "and the migration is tried again on the next start.", ex);
-                try
-                {
-                    File.Delete(path + ".tmp"); // what WriteAtomic may have left behind
-                }
-                catch (Exception)
-                {
-                    // nothing more to do
-                }
+                DeleteTemporaryFile(path);
+            }
+        }
+
+        /// <summary>Writes a current file back with the settings it did not have; a failure is only logged.</summary>
+        private static void SaveCompleted(string path, JObject completed, IReadOnlyList<string> added)
+        {
+            try
+            {
+                JsonFile.WriteAtomic(path, completed);
+                Logger.Log($"Wrote {FileName} with every setting." + Added(added));
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Could not add the missing settings to {FileName}; their defaults are used for now, " +
+                           "and they are added on the next start.", ex);
+                DeleteTemporaryFile(path);
+            }
+        }
+
+        private static string Added(IReadOnlyList<string> added) =>
+            added.Count == 0 ? string.Empty : $" Added with their defaults: {string.Join(", ", added)}.";
+
+        private static void DeleteTemporaryFile(string path)
+        {
+            try
+            {
+                File.Delete(path + ".tmp"); // what WriteAtomic may have left behind
+            }
+            catch (Exception)
+            {
+                // nothing more to do
             }
         }
 
@@ -269,9 +339,10 @@ namespace YouTubeVideoPlayer.Twitch
         {
             SignIn ??= new();
             CommandCooldownSeconds ??= new();
-            NextVideoVote ??= new();
+            ForceVoteSkip ??= new();
             AutoVote ??= new();
             VoteSkip ??= new();
+            Revote ??= new();
             ChatterAverage ??= new();
 
             Version = TwitchSettingsMigration.CurrentVersion;
@@ -286,10 +357,12 @@ namespace YouTubeVideoPlayer.Twitch
                 .ToList();
 
             CommandCooldownSeconds.Clamp();
-            NextVideoVote.DurationSeconds = Math.Clamp(NextVideoVote.DurationSeconds, 15, 1800);
-            NextVideoVote.RevoteDurationSeconds = Math.Clamp(NextVideoVote.RevoteDurationSeconds, 15, 600);
+            ForceVoteSkip.DurationSeconds = Math.Clamp(ForceVoteSkip.DurationSeconds, 15, 1800);
+            Revote.DurationSeconds = Math.Clamp(Revote.DurationSeconds, 15, 600);
             AutoVote.LeadTimeSeconds = Math.Clamp(AutoVote.LeadTimeSeconds, 60, 3600);
+            AutoVote.DurationSeconds = Math.Clamp(AutoVote.DurationSeconds, 15, 1800);
             VoteSkip.DurationSeconds = Math.Clamp(VoteSkip.DurationSeconds, 15, 600);
+            VoteSkip.NextVideoVoteDurationSeconds = Math.Clamp(VoteSkip.NextVideoVoteDurationSeconds, 15, 1800);
             VoteSkip.RequiredPercent = Math.Clamp(VoteSkip.RequiredPercent, 1, 100);
             VoteSkip.CooldownMinutes = Math.Clamp(VoteSkip.CooldownMinutes, 1, 1440);
             ChatterAverage.WindowMinutes = Math.Clamp(ChatterAverage.WindowMinutes, 5, 1440);

@@ -107,7 +107,7 @@ public class NowPlayingCardTests
     }, sta: true);
 
     [Fact]
-    public void Closes_HidesAndStopsTheClock() => UiContext.Run(() =>
+    public void Closes_FadingOutAsAWhole_ThenHidesAndStopsTheClock() => UiContext.Run(() =>
     {
         using var host = new Host();
         host.Card.Content = Video;
@@ -117,11 +117,13 @@ public class NowPlayingCardTests
         host.Card.Showing = false;
         host.Run(NowPlayingCard.CloseDuration / 2);
         Assert.True(host.Card.Visible);
-        Assert.True(host.Card.PillWidth < host.Card.CardWidth);
+        Assert.InRange(host.Card.Opacity, 0.3, 0.7); // pill, circle and text fade together ...
+        Assert.Equal(host.Card.CardWidth, host.Card.PillWidth); // ... at full size, nothing folds up first
+        Assert.Equal(1, host.Card.Progress);
 
         host.Finish();
         Assert.False(host.Card.Visible);
-        Assert.Equal(0, host.Card.Progress);
+        Assert.Equal(0, host.Card.Progress); // the next opening starts from the circle
         Assert.False(host.Card.IsClockRunning);
         Assert.Equal(Video, host.Card.Content); // kept: it closed with its text
     }, sta: true);
@@ -136,11 +138,19 @@ public class NowPlayingCardTests
         var progress = host.Card.Progress;
 
         host.Card.Showing = false;
-        host.Run(TimeSpan.FromMilliseconds(10));
+        host.Run(TimeSpan.FromMilliseconds(50));
+        Assert.Equal(progress, host.Card.Progress); // it fades as it is
+        var opacity = host.Card.Opacity;
+        Assert.InRange(opacity, 0.5, 0.95);
 
-        Assert.InRange(host.Card.Progress, progress - 0.05, progress - 0.001); // a small step back, no jump
+        host.Card.Showing = true; // back again before it was gone
+        host.Run(TimeSpan.FromMilliseconds(10));
+        Assert.InRange(host.Card.Opacity, opacity, opacity + 0.1); // no jump
+        Assert.True(host.Card.Progress > progress); // and it opens on from there
+
         host.Finish();
-        Assert.False(host.Card.Visible);
+        Assert.Equal(1, host.Card.Opacity);
+        Assert.Equal(1, host.Card.Progress);
     }, sta: true);
 
     [Fact]

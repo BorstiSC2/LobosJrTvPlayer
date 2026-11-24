@@ -11,7 +11,7 @@ namespace YouTubeVideoPlayer.Tests.Twitch;
 
 public class AutoVoteCommandTests
 {
-    private const string On = "Autovote is ON: a vote for the next video starts 5 minutes before the current video ends.";
+    private const string On = "Autovote is ON: a vote for the next video starts 400 seconds before the current video ends.";
     private const string Off = "Autovote is OFF: no vote starts by itself.";
 
     private static IAutoVoteControl Control(bool enabled, TimeSpan? leadTime = null)
@@ -71,7 +71,7 @@ public class AutoVoteCommandTests
 
         var first = await command.ExecuteAsync(Chat.Command("!toggleautovote", moderator: true));
         Assert.True(control.Enabled);
-        Assert.Equal("Autovote is now ON: a vote for the next video starts 5 minutes before the current video ends.", first);
+        Assert.Equal("Autovote is now ON: a vote for the next video starts 400 seconds before the current video ends.", first);
 
         var second = await command.ExecuteAsync(Chat.Command("!toggleautovote", moderator: true));
         Assert.False(control.Enabled);

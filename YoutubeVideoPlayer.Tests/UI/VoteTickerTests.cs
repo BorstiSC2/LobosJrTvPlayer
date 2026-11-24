@@ -45,15 +45,11 @@ public class VoteTickerTests
         Assert.Null(VoteTicker.From(ThreeOptions(VoteKind.NextVideo, null, 0, 0, 0)).Time);
 
     [Fact]
-    public void WhileTheOptionsAreLookedUp_ItSaysTheVideosAreBeingPicked()
+    public void AVote_IsComplete_OnceItsOptionsAreKnown_EvenBeforeItsTime()
     {
-        var ticker = VoteTicker.From(new VoteDisplay(VoteKind.NextVideo, Array.Empty<VoteDisplayOption>(), null));
-
-        Assert.Equal(OverlayStyle.VoteGlyph, ticker.Icon);
-        Assert.Equal("Vote", ticker.Label);
-        Assert.Null(ticker.Time);
-        Assert.Empty(ticker.Items);
-        Assert.Equal(VoteTicker.PreparingHint, ticker.Hint);
+        Assert.False(VoteTicker.IsComplete(new VoteDisplay(VoteKind.NextVideo, Array.Empty<VoteDisplayOption>(), null)));
+        Assert.True(VoteTicker.IsComplete(ThreeOptions(VoteKind.NextVideo, null, 0, 0, 0)));
+        Assert.True(VoteTicker.IsComplete(ThreeOptions(VoteKind.VideoAfterCurrent, TimeSpan.FromMinutes(1), 0, 0, 0)));
     }
 
     [Fact]

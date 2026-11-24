@@ -28,17 +28,21 @@
     "modVodCommands": 5,
     "commandHelp": 5
   },
-  "nextVideoVote": {
-    "durationSeconds": 120,
-    "revoteDurationSeconds": 45
+  "forceVoteSkip": {
+    "durationSeconds": 120
   },
   "autoVote": {
-    "leadTimeSeconds": 300
+    "leadTimeSeconds": 400,
+    "durationSeconds": 300
   },
   "voteSkip": {
-    "durationSeconds": 60,
-    "requiredPercent": 75,
-    "cooldownMinutes": 30
+    "durationSeconds": 120,
+    "requiredPercent": 65,
+    "cooldownMinutes": 30,
+    "nextVideoVoteDurationSeconds": 120
+  },
+  "revote": {
+    "durationSeconds": 45
   },
   "chatterAverage": {
     "windowMinutes": 60,

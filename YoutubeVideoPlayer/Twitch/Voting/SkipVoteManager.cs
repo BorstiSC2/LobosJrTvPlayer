@@ -31,7 +31,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// <summary>How long posting the rules and all options takes; the countdown starts after that.</summary>
         public static TimeSpan AnnouncementDuration => MessageDelay * OptionCount;
 
-        /// <summary>The length of a revote if none is set (<c>nextVideoVote.revoteDurationSeconds</c>).</summary>
+        /// <summary>The length of a revote if none is set (<c>revote.durationSeconds</c>).</summary>
         public static readonly TimeSpan DefaultRevoteDuration = TimeSpan.FromSeconds(45);
 
         /// <summary>
@@ -120,7 +120,10 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         private void OnDisplayChanged() => DisplayChanged?.Invoke(this, EventArgs.Empty);
 
-        /// <summary>The standard length of a vote (the countdown after the last option has been posted).</summary>
+        /// <summary>
+        /// The length of a vote started by a moderator (<c>!forcevoteskip</c>): the countdown after the last option has been
+        /// posted. The autovote and the vote after a won <c>!voteskip</c> pass their own.
+        /// </summary>
         public TimeSpan Duration => _duration;
 
         /// <summary>
@@ -131,8 +134,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         /// <inheritdoc cref="StartAsync(ChatCommandContext)"/>
         /// <param name="startedBy">Who started the vote, for the log (e.g. <c>!voteskip</c>).</param>
-        public Task<string?> StartAsync(string startedBy) =>
-            StartCoreAsync(startedBy, afterCurrent: false, _duration);
+        /// <param name="duration">Length of the countdown; <see cref="Duration"/> by default.</param>
+        public Task<string?> StartAsync(string startedBy, TimeSpan? duration = null) =>
+            StartCoreAsync(startedBy, afterCurrent: false, duration ?? _duration);
 
         /// <summary>
         /// What <c>!voteinfo</c> says about the running vote: its options and the time left; <c>null</c> without a vote.

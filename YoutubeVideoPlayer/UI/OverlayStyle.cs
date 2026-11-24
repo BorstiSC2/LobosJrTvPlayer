@@ -1,32 +1,40 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Linq;
-using System.Windows.Forms;
 
 namespace YouTubeVideoPlayer.UI
 {
     /// <summary>
-    /// The look of everything that is drawn over the video (the title, the vote ticker, the buffering, resume and waiting
-    /// labels): a dark box, an orange badge with an icon at its left, Segoe UI text, and the vote items with a numbered
-    /// circle, a small bar and the count.
+    /// The look of everything that is drawn over the video (the "now playing" card, the status strip and vote ticker, the
+    /// labels in the middle, the volume): a translucent dark pill with round ends, an orange circle with an icon at its
+    /// left, white Segoe UI text and a soft orange caption.
     /// </summary>
     /// <remarks>
-    /// Sizes are pixels at 96 DPI, scaled with the DPI the style is made for. Text is drawn with GDI
-    /// (<see cref="TextRenderer"/>) on the opaque colours, shapes with GDI+.
+    /// Everything is drawn with GDI+ onto the transparent frame of a <see cref="LayeredOverlay"/> (GDI text cannot be drawn
+    /// with an alpha channel, so text gets grey-scale smoothing). Sizes are pixels at 96 DPI, scaled with the DPI the style
+    /// is made for.
     /// </remarks>
     internal sealed class OverlayStyle : IDisposable
     {
-        /// <summary>The badge colour.</summary>
+        /// <summary>The circles, the leading option, the bars.</summary>
         public static readonly Color Accent = Color.FromArgb(0xD8, 0x5A, 0x30);
 
-        /// <summary>Time, counts and bars on the dark box.</summary>
+        /// <summary>Captions ("Now playing", "Vote") and counts on the pill.</summary>
         public static readonly Color AccentSoft = Color.FromArgb(0xF5, 0xC4, 0xB3);
 
-        /// <summary>The box: black at 200/255 over the form.</summary>
-        private static readonly Color BoxOverlay = Color.FromArgb(200, 0, 0, 0);
+        /// <summary>The pill: almost black, see-through.</summary>
+        public static readonly Color Back = Color.FromArgb(225, 14, 15, 19);
+
+        /// <summary>Times and hints.</summary>
+        public static readonly Color Muted = Color.FromArgb(180, 255, 255, 255);
+
+        /// <summary>Circles of the options that do not lead, the track of the bars, dividers.</summary>
+        public static readonly Color Faint = Color.FromArgb(50, 255, 255, 255);
+
+        /// <summary>The track of a ring on an orange circle.</summary>
+        public static readonly Color RingTrack = Color.FromArgb(0x71, 0x2B, 0x13);
 
         // Icons of Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10), which share these code points.
         public const char PlayGlyph = '';
@@ -37,9 +45,8 @@ namespace YouTubeVideoPlayer.UI
         public const char ConnectionLostGlyph = '';
         public const char ReloadGlyph = '';
         public const char WaitingGlyph = '';
-
-        private const TextFormatFlags Flags =
-            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter;
+        public const char VolumeGlyph = '';
+        public const char MuteGlyph = '';
 
         private static readonly Lazy<string> IconFamily = new(() =>
         {
@@ -50,46 +57,51 @@ namespace YouTubeVideoPlayer.UI
 
         private readonly int _dpi;
 
-        public OverlayStyle(int dpi, Color under)
+        public OverlayStyle(int dpi)
         {
             _dpi = dpi;
-            Box = Blend(BoxOverlay, under);
-            Muted = Blend(Color.FromArgb(140, 255, 255, 255), Box);
-            Faint = Blend(Color.FromArgb(40, 255, 255, 255), Box);
             Text = new Font("Segoe UI", Points(12.5f), GraphicsUnit.Pixel);
             Strong = new Font("Segoe UI Semibold", Points(12.5f), GraphicsUnit.Pixel);
             Small = new Font("Segoe UI Semibold", Points(9), GraphicsUnit.Pixel);
             Title = new Font("Segoe UI Semibold", Points(16), GraphicsUnit.Pixel);
             Caption = new Font("Segoe UI", Points(10), GraphicsUnit.Pixel);
             Icon = new Font(IconFamily.Value, Points(11.5f), GraphicsUnit.Pixel);
+            LargeIcon = new Font(IconFamily.Value, Points(14), GraphicsUnit.Pixel);
         }
-
-        /// <summary>The dark box, opaque (the overlay colour blended over what is behind it).</summary>
-        public Color Box { get; }
-
-        /// <summary>Hints.</summary>
-        public Color Muted { get; }
-
-        /// <summary>Circles of the options that do not lead, the track of the bars, dividers.</summary>
-        public Color Faint { get; }
 
         public Font Text { get; }
 
         public Font Strong { get; }
 
+        /// <summary>The numbers in the option circles.</summary>
         public Font Small { get; }
 
-        /// <summary>The title on the "now playing" card.</summary>
+        /// <summary>The main line of the card and the strip.</summary>
         public Font Title { get; }
 
-        /// <summary>The second row of the "now playing" card.</summary>
+        /// <summary>The second line ("Now playing · 12:04", "Vote · 1:20").</summary>
         public Font Caption { get; }
 
+        /// <summary>Icons in the circles of the labels in the middle.</summary>
         public Font Icon { get; }
 
-        public int Height => Scale(36);
+        /// <summary>Icons in the circles of the card and the strip.</summary>
+        public Font LargeIcon { get; }
 
-        public int Padding => Scale(12);
+        /// <summary>The card and the strip at the bottom left (they share the place and the size).</summary>
+        public int PillHeight => Scale(64);
+
+        /// <summary>The labels in the middle and the volume.</summary>
+        public int CompactHeight => Scale(48);
+
+        /// <summary>The space between the circle and the pill's edge.</summary>
+        public int CircleMargin(int height) => height >= PillHeight ? Scale(8) : Scale(6);
+
+        /// <summary>Where the text starts: right of the circle.</summary>
+        public int TextLeft(int height) => height - CircleMargin(height) + Scale(height >= PillHeight ? 12 : 10);
+
+        /// <summary>The space after the text, before the round end.</summary>
+        public int TextRight(int height) => Scale(height >= PillHeight ? 24 : 20);
 
         public int Gap => Scale(8);
 
@@ -97,71 +109,131 @@ namespace YouTubeVideoPlayer.UI
 
         private float Points(float points) => points * _dpi / 72f;
 
-        public static int Measure(string text, Font font) =>
-            text.Length == 0 ? 0 : TextRenderer.MeasureText(text, font, Size.Empty, Flags).Width;
+        /// <summary>The colour with its alpha multiplied by <paramref name="alpha"/> (0 to 1).</summary>
+        public static Color Fade(Color color, double alpha) =>
+            Color.FromArgb((int)Math.Round(color.A * Math.Clamp(alpha, 0, 1)), color);
 
-        public void DrawText(Graphics g, string text, Font font, int x, Color color, Color back, int width = int.MaxValue / 2, bool ellipsis = false) =>
-            DrawText(g, text, font, new Rectangle(x, 0, width, Height), color, back, ellipsis);
-
-        /// <summary>Text centred vertically in <paramref name="bounds"/> (for rows other than the strip's one row).</summary>
-        public static void DrawText(Graphics g, string text, Font font, Rectangle bounds, Color color, Color back, bool ellipsis = false) =>
-            TextRenderer.DrawText(g, text, font, bounds, color, back,
-                Flags | (ellipsis ? TextFormatFlags.EndEllipsis : TextFormatFlags.Default));
-
-        /// <summary>
-        /// Renders something once into a bitmap on the box colour, so a frame only has to copy it. <c>null</c> for an empty
-        /// width.
-        /// </summary>
-        public Bitmap? Render(int width, int height, Action<Graphics> draw)
+        private static StringFormat Format(bool ellipsis, StringAlignment alignment = StringAlignment.Near)
         {
-            if (width <= 0 || height <= 0)
-                return null;
+            var format = (StringFormat)StringFormat.GenericTypographic.Clone();
+            format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
+            format.Trimming = ellipsis ? StringTrimming.EllipsisCharacter : StringTrimming.None;
+            format.Alignment = alignment;
+            format.LineAlignment = StringAlignment.Center;
+            return format;
+        }
 
-            // No alpha channel: GDI text written into an ARGB bitmap would come out transparent.
-            using var rgb = new Bitmap(width, height, PixelFormat.Format32bppRgb);
-            using (var g = Graphics.FromImage(rgb))
+        /// <summary>The width of a text as <see cref="DrawText"/> draws it.</summary>
+        public static int Measure(string text, Font font)
+        {
+            if (text.Length == 0)
+                return 0;
+
+            using var bitmap = new Bitmap(1, 1);
+            using var g = Graphics.FromImage(bitmap);
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            using var format = Format(ellipsis: false);
+            return (int)Math.Ceiling(g.MeasureString(text, font, PointF.Empty, format).Width);
+        }
+
+        /// <summary>Text centred vertically in <paramref name="bounds"/>, cut off with an ellipsis if asked.</summary>
+        public static void DrawText(Graphics g, string text, Font font, Color color, RectangleF bounds, bool ellipsis = false,
+            StringAlignment alignment = StringAlignment.Near)
+        {
+            if (text.Length == 0 || color.A == 0 || bounds.Width <= 0)
+                return;
+
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            using var brush = new SolidBrush(color);
+            using var format = Format(ellipsis, alignment);
+            g.DrawString(text, font, brush, bounds, format);
+        }
+
+        /// <summary>A shape with round ends (a circle where it is not wider than high).</summary>
+        public static GraphicsPath PillPath(RectangleF bounds)
+        {
+            var path = new GraphicsPath();
+            var diameter = Math.Min(bounds.Width, bounds.Height);
+            if (diameter <= 0)
+                return path;
+
+            path.AddArc(bounds.X, bounds.Y, diameter, diameter, 90, 180);
+            path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 180);
+            path.CloseFigure();
+            return path;
+        }
+
+        /// <summary>The translucent pill.</summary>
+        public static void FillPill(Graphics g, RectangleF bounds, double alpha = 1)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            using var path = PillPath(bounds);
+            using var brush = new SolidBrush(Fade(Back, alpha));
+            g.FillPath(brush, path);
+        }
+
+        /// <summary>The orange circle of a pill whose height is <paramref name="height"/>.</summary>
+        public RectangleF Circle(int height)
+        {
+            var margin = CircleMargin(height);
+            return new RectangleF(margin, margin, height - 2 * margin, height - 2 * margin);
+        }
+
+        public static void FillCircle(Graphics g, RectangleF circle, double alpha = 1)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using var brush = new SolidBrush(Fade(Accent, alpha));
+            g.FillEllipse(brush, circle);
+        }
+
+        /// <summary>An icon glyph, centred in the circle.</summary>
+        public static void DrawGlyph(Graphics g, char glyph, Font font, RectangleF circle, double alpha = 1) =>
+            DrawText(g, glyph.ToString(), font, Fade(Color.White, alpha), circle, alignment: StringAlignment.Center);
+
+        /// <summary>A solid play triangle with soft corners; it looks centred a little right of the middle.</summary>
+        public void DrawPlay(Graphics g, RectangleF circle, double alpha = 1)
+        {
+            var size = circle.Width * 0.34f;
+            var x = circle.X + circle.Width / 2 - size * 0.38f;
+            var y = circle.Y + circle.Height / 2;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using var triangle = new GraphicsPath();
+            using var fill = new SolidBrush(Fade(Color.White, alpha));
+            using var corners = new Pen(Fade(Color.White, alpha), Math.Max(1f, Scale(2))) { LineJoin = LineJoin.Round };
+            triangle.AddPolygon(new[] { new PointF(x, y - size / 2), new PointF(x + size * 0.9f, y), new PointF(x, y + size / 2) });
+            g.FillPath(fill, triangle);
+            g.DrawPath(corners, triangle);
+        }
+
+        /// <summary>A ring along the inside of the circle that fills clockwise from the top (<paramref name="share"/> 0 to 1).</summary>
+        public void DrawRing(Graphics g, RectangleF circle, double share, double alpha = 1)
+        {
+            var stroke = Math.Max(2f, Scale(3));
+            var ring = RectangleF.Inflate(circle, -stroke, -stroke);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var track = new Pen(Fade(RingTrack, alpha), stroke))
+                g.DrawEllipse(track, ring);
+            var sweep = (float)(360 * Math.Clamp(share, 0, 1));
+            if (sweep <= 0)
+                return;
+
+            if (sweep < MinimumArc)
             {
-                g.Clear(Box);
-                draw(g);
+                // GDI+ cannot draw a very short arc with round caps (DrawArc fails with "An object could not be created
+                // ...", measured up to 0.37°): the ring of a long video is that short in its first seconds. Such an arc
+                // looks like a dot anyway: a round cap at the top of the ring.
+                using var dot = new SolidBrush(Fade(Color.White, alpha));
+                g.FillEllipse(dot, ring.X + ring.Width / 2 - stroke / 2, ring.Y - stroke / 2, stroke, stroke);
+                return;
             }
 
-            // Premultiplied ARGB (opaque) is the format GDI+ copies fastest; anything else is converted on every frame.
-            return rgb.Clone(new Rectangle(0, 0, width, height), PixelFormat.Format32bppPArgb);
+            using var bar = new Pen(Fade(Color.White, alpha), stroke) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(bar, ring, -90, sweep);
         }
 
-        /// <summary>The orange badge: an icon and, if given, a word.</summary>
-        public int BadgeWidth(char icon, string? label) =>
-            Padding + Measure(icon.ToString(), Icon) + (string.IsNullOrEmpty(label) ? 0 : Scale(7) + Measure(label, Strong)) + Padding;
-
-        public int DrawBadge(Graphics g, int x, char icon, string? label)
-        {
-            var width = BadgeWidth(icon, label);
-            using (var brush = new SolidBrush(Accent))
-                g.FillRectangle(brush, x, 0, width, Height);
-
-            var at = x + Padding;
-            DrawText(g, icon.ToString(), Icon, at, Color.White, Accent);
-            if (!string.IsNullOrEmpty(label))
-                DrawText(g, label, Strong, at + Measure(icon.ToString(), Icon) + Scale(7), Color.White, Accent);
-
-            return width;
-        }
-
-        /// <summary>The time left, with a clock, and a divider after it.</summary>
-        public int TimeWidth(string time) =>
-            Padding + Measure(ClockGlyph.ToString(), Icon) + Scale(6) + Measure(time, Strong) + Padding + 1;
-
-        public int DrawTime(Graphics g, int x, string time)
-        {
-            var width = TimeWidth(time);
-            var clock = ClockGlyph.ToString();
-            DrawText(g, clock, Icon, x + Padding, AccentSoft, Box);
-            DrawText(g, time, Strong, x + Padding + Measure(clock, Icon) + Scale(6), AccentSoft, Box);
-            using (var pen = new Pen(Faint))
-                g.DrawLine(pen, x + width - 1, 0, x + width - 1, Height);
-
-            return width;
-        }
+        /// <summary>Arcs shorter than this (degrees) are drawn as a dot; see <see cref="DrawRing"/>.</summary>
+        private const float MinimumArc = 2;
 
         /// <summary>One option of a vote: number in a circle, title, bar, count (all optional but the title).</summary>
         public int ItemWidth(TickerItem item)
@@ -177,79 +249,56 @@ namespace YouTubeVideoPlayer.UI
             return width + Scale(14);
         }
 
-        public int DrawItem(Graphics g, int x, TickerItem item)
+        /// <summary>Draws an option at <paramref name="x"/>, centred in the row from <paramref name="top"/> on.</summary>
+        public int DrawItem(Graphics g, int x, int top, int height, TickerItem item)
         {
             var at = x + Scale(14);
             if (item.Number != null)
             {
                 var diameter = Scale(20);
-                var top = (Height - diameter) / 2;
-                var smoothing = g.SmoothingMode;
+                var circle = new RectangleF(at, top + (height - diameter) / 2f, diameter, diameter);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 using (var brush = new SolidBrush(item.Leading ? Accent : Faint))
-                    g.FillEllipse(brush, at, top, diameter, diameter);
-                g.SmoothingMode = smoothing;
-
-                TextRenderer.DrawText(g, item.Number, Small, new Rectangle(at, top, diameter, diameter), Color.White,
-                    item.Leading ? Accent : Faint,
-                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine
-                        | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    g.FillEllipse(brush, circle);
+                DrawText(g, item.Number, Small, Color.White, circle, alignment: StringAlignment.Center);
                 at += diameter + Gap;
             }
 
-            DrawText(g, item.Text, Text, at, Color.White, Box);
-            at += Measure(item.Text, Text);
+            var textWidth = Measure(item.Text, Text);
+            DrawText(g, item.Text, Text, Color.White, new RectangleF(at, top, textWidth + 1, height));
+            at += textWidth;
 
             if (item.Share is { } share)
             {
                 at += Gap;
                 var width = Scale(46);
-                var height = Math.Max(2, Scale(4));
-                DrawBar(g, new Rectangle(at, (Height - height) / 2, width, height), share, item.Leading ? Color.White : AccentSoft);
+                var barHeight = Math.Max(2, Scale(4));
+                DrawBar(g, new RectangleF(at, top + (height - barHeight) / 2f, width, barHeight), share, item.Leading ? Color.White : AccentSoft);
                 at += width;
             }
 
             if (item.Count != null)
-                DrawText(g, item.Count, Strong, at + Scale(7), item.Leading ? Color.White : AccentSoft, Box);
+                DrawText(g, item.Count, Strong, item.Leading ? Color.White : AccentSoft,
+                    new RectangleF(at + Scale(7), top, Measure(item.Count, Strong) + 1, height));
 
             return ItemWidth(item);
         }
 
         /// <summary>A rounded bar: the track in <see cref="Faint"/>, the share (0 to 1) of it filled in <paramref name="fill"/>.</summary>
-        public void DrawBar(Graphics g, Rectangle bounds, double share, Color fill)
+        public static void DrawBar(Graphics g, RectangleF bounds, double share, Color fill)
         {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             using (var track = new SolidBrush(Faint))
-                FillRounded(g, track, bounds);
+            using (var path = PillPath(bounds))
+                g.FillPath(track, path);
 
             var filled = (float)(bounds.Width * Math.Clamp(share, 0, 1));
             if (filled > 0.5f)
             {
                 using var bar = new SolidBrush(fill);
-                FillRounded(g, bar, new RectangleF(bounds.X, bounds.Y, Math.Max(filled, bounds.Height), bounds.Height));
+                using var path = PillPath(bounds with { Width = Math.Max(filled, bounds.Height) });
+                g.FillPath(bar, path);
             }
-        }
-
-        private static void FillRounded(Graphics g, Brush brush, RectangleF rect)
-        {
-            var radius = rect.Height / 2;
-            using var path = new GraphicsPath();
-            path.AddArc(rect.X, rect.Y, radius * 2, rect.Height, 90, 180);
-            path.AddArc(rect.Right - radius * 2, rect.Y, radius * 2, rect.Height, 270, 180);
-            path.CloseFigure();
-            var smoothing = g.SmoothingMode;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.FillPath(brush, path);
-            g.SmoothingMode = smoothing;
-        }
-
-        /// <summary><paramref name="over"/> (with its alpha) on top of the opaque <paramref name="under"/>.</summary>
-        public static Color Blend(Color over, Color under)
-        {
-            var a = over.A / 255.0;
-            return Color.FromArgb(
-                (int)Math.Round(over.R * a + under.R * (1 - a)),
-                (int)Math.Round(over.G * a + under.G * (1 - a)),
-                (int)Math.Round(over.B * a + under.B * (1 - a)));
         }
 
         public void Dispose()
@@ -260,6 +309,7 @@ namespace YouTubeVideoPlayer.UI
             Title.Dispose();
             Caption.Dispose();
             Icon.Dispose();
+            LargeIcon.Dispose();
         }
     }
 }

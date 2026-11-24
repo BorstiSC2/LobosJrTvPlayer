@@ -10,9 +10,11 @@ namespace YouTubeVideoPlayer.Twitch
     /// a time. A file without <c>"version"</c> is version 1 (the flat layout before versions existed).
     /// </summary>
     /// <remarks>
-    /// A migration only moves and renames what is there: values are copied unchanged (they are clamped when the settings
-    /// are loaded), keys that are missing stay missing (the defaults apply), and keys it does not know are kept at the end.
-    /// To change the layout again: raise <see cref="CurrentVersion"/>, add a step to <see cref="Steps"/> and a test.
+    /// A migration step only moves and renames what is there: values are copied unchanged (they are clamped when the
+    /// settings are loaded), and keys it does not know are kept at the end. Afterwards <see cref="AddMissing"/> adds every
+    /// setting the file still lacks with its default. To change the layout again: raise <see cref="CurrentVersion"/>, add
+    /// a step to <see cref="Steps"/> and a test, and add the new settings to <see cref="TwitchSettings"/> and the example
+    /// file.
     /// </remarks>
     public static class TwitchSettingsMigration
     {
@@ -48,8 +50,13 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>
         /// Version 1 → 2: the sign-in in its own section, one cooldown per command (the old shared values are copied to
         /// each command that used them; the mod commands that change what plays share one), and a section per vote.
-        /// Settings that are new in version 2 (<c>nextVideoVote.revoteDurationSeconds</c>) have no older key: they stay
-        /// missing, so their defaults apply.
+        /// <c>!forcevoteskip</c> keeps the vote length of version 1 (<c>skipVoteDurationSeconds</c> →
+        /// <c>forceVoteSkip.durationSeconds</c>). The Autovote and the
+        /// <c>!voteskip</c> vote get new timings with version 2, whatever the old file said: the Autovote starts 400 s before
+        /// the end and runs 300 s, a <c>!voteskip</c> vote runs 120 s and needs 65 % of the recent chatters, and the vote
+        /// after a won <c>!voteskip</c> runs 120 s. These are written as fixed values (not the current defaults), so the
+        /// step stays the same when a default changes later. Settings that are new in version 2 and not set here
+        /// (<c>revote.durationSeconds</c>) are added with their defaults by <see cref="AddMissing"/>.
         /// </summary>
         private static JObject FromVersion1(JObject old)
         {
@@ -102,19 +109,30 @@ namespace YouTubeVideoPlayer.Twitch
                 "autoVoteStatus", "toggleAutoVote", "token", "vodCommands", "modVodCommands", "commandHelp");
             PutSection(result, "commandCooldownSeconds", cooldowns);
 
-            var nextVideoVote = new JObject();
-            Put(nextVideoVote, "durationSeconds", Take("skipVoteDurationSeconds"));
-            PutSection(result, "nextVideoVote", nextVideoVote);
+            var forceVoteSkip = new JObject();
+            Put(forceVoteSkip, "durationSeconds", Take("skipVoteDurationSeconds"));
+            PutSection(result, "forceVoteSkip", forceVoteSkip);
 
-            var autoVote = new JObject();
-            Put(autoVote, "leadTimeSeconds", Take("autoVoteLeadTimeSeconds"));
-            PutSection(result, "autoVote", autoVote);
+            // New timings in version 2: the old values are dropped (taken, so they are not kept as unknown keys).
+            Take("autoVoteLeadTimeSeconds");
+            Take("voteSkipDurationSeconds");
+            Take("voteSkipPercent");
 
-            var voteSkip = new JObject();
-            Put(voteSkip, "durationSeconds", Take("voteSkipDurationSeconds"));
-            Put(voteSkip, "requiredPercent", Take("voteSkipPercent"));
+            var autoVote = new JObject
+            {
+                ["leadTimeSeconds"] = 400,
+                ["durationSeconds"] = 300
+            };
+            result["autoVote"] = autoVote;
+
+            var voteSkip = new JObject
+            {
+                ["durationSeconds"] = 120,
+                ["requiredPercent"] = 65
+            };
             Put(voteSkip, "cooldownMinutes", Take("voteSkipCooldownMinutes"));
-            PutSection(result, "voteSkip", voteSkip);
+            voteSkip["nextVideoVoteDurationSeconds"] = 120;
+            result["voteSkip"] = voteSkip;
 
             var chatterAverage = new JObject();
             Put(chatterAverage, "windowMinutes", Take("chatterAverageWindowMinutes"));
@@ -125,6 +143,46 @@ namespace YouTubeVideoPlayer.Twitch
             foreach (var property in old.Properties().Where(p => !used.Contains(p.Name)))
             {
                 if (result.Property(property.Name, StringComparison.OrdinalIgnoreCase) == null)
+                    result[property.Name] = property.Value.DeepClone();
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The file with every setting of <paramref name="defaults"/> it does not have (or has as <c>null</c>) added with
+        /// its default. The result has the order of the defaults (that of the example file), sections included; the file's
+        /// values are kept as they are, keys are found whatever their case, and keys the defaults do not know (notes, typos)
+        /// are kept after the known ones.
+        /// </summary>
+        /// <param name="added">Receives the settings that were added, as <c>section.key</c>.</param>
+        public static JObject AddMissing(JObject settings, JObject defaults, ICollection<string>? added = null) =>
+            AddMissing(settings, defaults, added, prefix: string.Empty);
+
+        private static JObject AddMissing(JObject settings, JObject defaults, ICollection<string>? added, string prefix)
+        {
+            var result = new JObject();
+            foreach (var setting in defaults.Properties())
+            {
+                var own = settings.Property(setting.Name, StringComparison.OrdinalIgnoreCase)?.Value;
+                if (own is null or { Type: JTokenType.Null })
+                {
+                    result[setting.Name] = setting.Value.DeepClone();
+                    added?.Add(prefix + setting.Name);
+                }
+                else if (setting.Value is JObject section && own is JObject ownSection)
+                {
+                    result[setting.Name] = AddMissing(ownSection, section, added, prefix + setting.Name + ".");
+                }
+                else
+                {
+                    result[setting.Name] = own.DeepClone();
+                }
+            }
+
+            foreach (var property in settings.Properties())
+            {
+                if (defaults.Property(property.Name, StringComparison.OrdinalIgnoreCase) == null)
                     result[property.Name] = property.Value.DeepClone();
             }
 

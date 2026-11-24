@@ -34,7 +34,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
     public sealed class AutoVoteManager : IAutoVoteControl, IDisposable
     {
         /// <summary>How long before the end of a video the vote starts, unless <c>twitchsettings.json</c> sets another time.</summary>
-        public static readonly TimeSpan DefaultLeadTime = TimeSpan.FromMinutes(5);
+        public static readonly TimeSpan DefaultLeadTime = TimeSpan.FromSeconds(400);
 
         /// <summary>How often the remaining time of the current video is checked.</summary>
         public static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(5);
@@ -43,8 +43,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         public static readonly TimeSpan SafetyMargin = TimeSpan.FromSeconds(10);
 
         /// <summary>
-        /// The shortest autovote (or the configured vote length, if that is shorter). A video too short for it gets a
-        /// vote of this length all the same, and the next video waits until the vote is over.
+        /// The shortest autovote (or <see cref="VoteDuration"/>, if that is shorter). A video too short for it gets a vote
+        /// of this length all the same, and the next video waits until the vote is over.
         /// </summary>
         public static readonly TimeSpan ShortVideoVoteDuration = TimeSpan.FromMinutes(2);
 
@@ -59,13 +59,18 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private bool _disposed;
 
         /// <param name="isOtherVoteRunning">Whether another vote (<c>!voteskip</c>) runs; no autovote starts meanwhile.</param>
+        /// <param name="voteDuration">
+        /// How long the autovote's vote runs (<c>autoVote.durationSeconds</c>) when there is time enough;
+        /// <see cref="SkipVoteManager.Duration"/> by default.
+        /// </param>
         public AutoVoteManager(
             IChatChannel chat,
             IPlaybackControl playback,
             SkipVoteManager votes,
             TimeProvider? timeProvider = null,
             TimeSpan? leadTime = null,
-            Func<bool>? isOtherVoteRunning = null)
+            Func<bool>? isOtherVoteRunning = null,
+            TimeSpan? voteDuration = null)
         {
             var context = SynchronizationContext.Current
                 ?? throw new InvalidOperationException("AutoVoteManager must be created on the UI thread.");
@@ -75,6 +80,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             _votes = votes;
             _time = timeProvider ?? TimeProvider.System;
             LeadTime = leadTime ?? DefaultLeadTime;
+            VoteDuration = voteDuration ?? votes.Duration;
             _isOtherVoteRunning = isOtherVoteRunning ?? (() => false);
             _timer = new ContextTimer(context, CheckInterval, periodic: true, Check, _time);
         }
@@ -111,6 +117,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// <summary>How long before the end of a video the vote starts (<see cref="DefaultLeadTime"/> unless configured).</summary>
         public TimeSpan LeadTime { get; }
 
+        /// <summary>How long the vote runs when there is time enough (it is shortened to end before the video does).</summary>
+        public TimeSpan VoteDuration { get; }
+
         /// <summary>Raised when <see cref="Enabled"/> changed (by the checkbox or by a chat command).</summary>
         public event EventHandler? EnabledChanged;
 
@@ -137,7 +146,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             // Posting the options takes a few seconds; the vote has to be over before the video is.
             var available = remaining - SkipVoteManager.AnnouncementDuration - SafetyMargin;
-            var shortest = _votes.Duration < ShortVideoVoteDuration ? _votes.Duration : ShortVideoVoteDuration;
+            var shortest = VoteDuration < ShortVideoVoteDuration ? VoteDuration : ShortVideoVoteDuration;
             if (available < shortest)
             {
                 // Too short for a proper vote: the vote gets its time, and the next video waits for it.
@@ -146,7 +155,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                 return;
             }
 
-            var duration = TimeSpan.FromSeconds(Math.Floor(Math.Min(_votes.Duration.TotalSeconds, available.TotalSeconds)));
+            var duration = TimeSpan.FromSeconds(Math.Floor(Math.Min(VoteDuration.TotalSeconds, available.TotalSeconds)));
 
             // Finding the options takes a moment too (a title lookup may take seconds); the vote manager
             // takes that out of the countdown so that the vote is over by then.

@@ -56,30 +56,31 @@ public class TwitchSettingsMigrationTests
                 "shuffleStatus": 4, "toggleShuffle": 4, "playlistShuffleStatus": 4, "togglePlaylistShuffle": 4,
                 "autoVoteStatus": 1, "toggleAutoVote": 1, "token": 1, "vodCommands": 1, "modVodCommands": 1, "commandHelp": 1
               },
-              "nextVideoVote": { "durationSeconds": 5 },
-              "autoVote": { "leadTimeSeconds": 6 },
-              "voteSkip": { "durationSeconds": 7, "requiredPercent": 8, "cooldownMinutes": 9 },
+              "forceVoteSkip": { "durationSeconds": 5 },
+              "autoVote": { "leadTimeSeconds": 400, "durationSeconds": 300 },
+              "voteSkip": { "durationSeconds": 120, "requiredPercent": 65, "cooldownMinutes": 9, "nextVideoVoteDurationSeconds": 120 },
               "chatterAverage": { "windowMinutes": 10, "bucketMinutes": 11 }
             }
             """, result);
 
         // In the documented order, so the written file reads like the example.
         Assert.Equal(
-            new[] { "version", "enabled", "channel", "signIn", "privilegedUsers", "commandCooldownSeconds", "nextVideoVote", "autoVote", "voteSkip", "chatterAverage" },
+            new[] { "version", "enabled", "channel", "signIn", "privilegedUsers", "commandCooldownSeconds", "forceVoteSkip", "autoVote", "voteSkip", "chatterAverage" },
             result.Properties().Select(p => p.Name));
     }
 
     [Fact]
-    public void OnlyThePresentKeys_AreMoved_SoTheDefaultsStillApply()
+    public void OnlyThePresentKeys_AreMoved_BesidesTheNewTimings()
     {
-        var result = Migrate("""{ "channel": "chan", "currentCooldownSeconds": 9, "voteSkipPercent": 50 }""", out _);
+        var result = Migrate("""{ "channel": "chan", "currentCooldownSeconds": 9 }""", out _);
 
         AssertJson("""
             {
               "version": 2,
               "channel": "chan",
               "commandCooldownSeconds": { "current": 9, "playlist": 9, "voteSkip": 9 },
-              "voteSkip": { "requiredPercent": 50 }
+              "autoVote": { "leadTimeSeconds": 400, "durationSeconds": 300 },
+              "voteSkip": { "durationSeconds": 120, "requiredPercent": 65, "nextVideoVoteDurationSeconds": 120 }
             }
             """, result);
     }
@@ -99,7 +100,8 @@ public class TwitchSettingsMigrationTests
     {
         var result = Migrate("""{ "_comment": "my bot", "channel": "chan", "timestampCooldownSeconds": 5 }""", out _);
 
-        Assert.Equal(new[] { "version", "channel", "_comment", "timestampCooldownSeconds" }, result.Properties().Select(p => p.Name));
+        Assert.Equal(new[] { "version", "channel", "autoVote", "voteSkip", "_comment", "timestampCooldownSeconds" },
+            result.Properties().Select(p => p.Name));
         Assert.Equal("my bot", (string)result["_comment"]!);
     }
 
@@ -140,5 +142,96 @@ public class TwitchSettingsMigrationTests
         var result = Migrate("{ }", out _);
 
         Assert.Equal(TwitchSettingsMigration.CurrentVersion, TwitchSettingsMigration.VersionOf(result));
+    }
+
+    [Fact]
+    public void TheAutovoteAndVoteSkipTimings_AreSetToTheNewValues_WhateverVersion1Said()
+    {
+        var result = Migrate("""
+            {
+              "skipVoteDurationSeconds": 90,
+              "autoVoteLeadTimeSeconds": 240,
+              "voteSkipDurationSeconds": 45,
+              "voteSkipPercent": 60,
+              "voteSkipCooldownMinutes": 20
+            }
+            """, out _);
+
+        AssertJson("""
+            {
+              "version": 2,
+              "forceVoteSkip": { "durationSeconds": 90 },
+              "autoVote": { "leadTimeSeconds": 400, "durationSeconds": 300 },
+              "voteSkip": { "durationSeconds": 120, "requiredPercent": 65, "cooldownMinutes": 20, "nextVideoVoteDurationSeconds": 120 }
+            }
+            """, result); // the old timings are gone, not kept as unknown keys; !forcevoteskip keeps its length
+    }
+
+    // ----- Adding the missing settings -----
+
+    private static readonly JObject Defaults = JObject.Parse("""
+        {
+          "version": 2,
+          "channel": "",
+          "signIn": { "clientId": "", "botLogin": "" },
+          "autoVote": { "leadTimeSeconds": 300, "durationSeconds": 120 }
+        }
+        """);
+
+    [Fact]
+    public void AddMissing_AddsEverySettingTheFileLacks_WithItsDefault_AndReportsThem()
+    {
+        var added = new List<string>();
+
+        var result = TwitchSettingsMigration.AddMissing(
+            JObject.Parse("""{ "version": 2, "signIn": { "botLogin": "bot" }, "autoVote": { "leadTimeSeconds": 600 } }"""),
+            Defaults, added);
+
+        AssertJson("""
+            {
+              "version": 2,
+              "channel": "",
+              "signIn": { "clientId": "", "botLogin": "bot" },
+              "autoVote": { "leadTimeSeconds": 600, "durationSeconds": 120 }
+            }
+            """, result);
+        Assert.Equal(new[] { "channel", "signIn.clientId", "autoVote.durationSeconds" }, added);
+    }
+
+    [Fact]
+    public void AddMissing_PutsTheSettingsInTheOrderOfTheDefaults_AndKeepsUnknownKeysAtTheEnd()
+    {
+        var result = TwitchSettingsMigration.AddMissing(
+            JObject.Parse("""{ "_note": "mine", "autoVote": { "durationSeconds": 60, "x": 1 }, "Channel": "chan", "version": 2 }"""),
+            Defaults);
+
+        Assert.Equal(new[] { "version", "channel", "signIn", "autoVote", "_note" }, result.Properties().Select(p => p.Name));
+        Assert.Equal(new[] { "leadTimeSeconds", "durationSeconds", "x" }, ((JObject)result["autoVote"]!).Properties().Select(p => p.Name));
+        Assert.Equal("chan", (string)result["channel"]!); // found whatever its case, written with the documented name
+        Assert.Equal(60, (int)result["autoVote"]!["durationSeconds"]!);
+    }
+
+    [Fact]
+    public void AddMissing_TreatsNullLikeMissing_AndKeepsEveryOtherValueAsItIs()
+    {
+        var result = TwitchSettingsMigration.AddMissing(
+            JObject.Parse("""{ "version": 2, "channel": null, "signIn": null, "autoVote": { "leadTimeSeconds": 99999 } }"""),
+            Defaults);
+
+        Assert.Equal("", (string)result["channel"]!);
+        Assert.Equal("", (string)result["signIn"]!["clientId"]!);
+        Assert.Equal(99999, (int)result["autoVote"]!["leadTimeSeconds"]!); // not clamped here: that happens on load
+    }
+
+    [Fact]
+    public void AddMissing_ChangesNothingInACompleteFile()
+    {
+        var complete = (JObject)Defaults.DeepClone();
+        var added = new List<string>();
+
+        var result = TwitchSettingsMigration.AddMissing(complete, Defaults, added);
+
+        Assert.True(JToken.DeepEquals(complete, result));
+        Assert.Empty(added);
     }
 }

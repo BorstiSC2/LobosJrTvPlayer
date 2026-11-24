@@ -135,6 +135,28 @@ public class NowPlayingScheduleTests
     });
 
     [Fact]
+    public void WhileBlocked_NothingNewIsDue_AndACardThatIsUpKeepsItsTimeWithoutBeingExtended() => UiContext.Run(async () =>
+    {
+        using var s = new Setup();
+        s.StartVideo();
+        await s.AdvanceAsync(TimeSpan.FromSeconds(10));
+
+        s.Schedule.Blocked = true; // a vote starts
+        s.Schedule.Show();         // !current
+        await s.AdvanceAsync(TimeSpan.FromSeconds(2));
+        Assert.False(s.Schedule.IsShown); // gone after its 12 s, not extended
+
+        s.StartVideo("v2");
+        await s.AdvanceAsync(NowPlayingSchedule.Interval);
+        Assert.False(s.Schedule.IsShown); // a new video and the regular appearance are dropped too
+
+        s.Schedule.Blocked = false;
+        Assert.False(s.Schedule.IsShown); // not postponed
+        s.Schedule.Show();
+        Assert.True(s.Schedule.IsShown);
+    });
+
+    [Fact]
     public void Dispose_StopsEverything() => UiContext.Run(async () =>
     {
         var s = new Setup();

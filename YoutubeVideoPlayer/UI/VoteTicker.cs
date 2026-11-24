@@ -7,14 +7,18 @@ namespace YouTubeVideoPlayer.UI
     /// <summary>Turns a running vote into what the vote ticker shows.</summary>
     internal static class VoteTicker
     {
-        /// <summary>What the ticker says while a vote's options are still being looked up.</summary>
-        public const string PreparingHint = "Picking the videos to vote on ...";
+        /// <summary>
+        /// Whether the vote has all the ticker shows: its options are known. While a vote for a video still looks up its
+        /// options, the ticker is not shown (it would only say "Vote" and get its options a few seconds later). The time left
+        /// may follow later (the countdown starts after the options are posted); it is added at the end of the caption.
+        /// </summary>
+        public static bool IsComplete(VoteDisplay display) => display.Options.Count > 0;
 
         /// <summary>
         /// A vote for a video: badge "Vote", the time left, the options with number, bar (their share of the votes) and
         /// count, the leader highlighted, and what to type. A skip vote: badge "Skip this video?", the video, <c>!skip</c>
-        /// and <c>!stay</c> with bars measured against the votes skipping needs. A vote whose options are still being looked
-        /// up: badge "Vote" and <see cref="PreparingHint"/>.
+        /// and <c>!stay</c> with bars measured against the votes skipping needs. Only for a vote that
+        /// <see cref="IsComplete"/>.
         /// </summary>
         public static TickerContent From(VoteDisplay display)
         {
@@ -35,12 +39,6 @@ namespace YouTubeVideoPlayer.UI
                 var lead = display.Subject == null ? null : $"\"{display.Subject}\"";
                 return new TickerContent(OverlayStyle.SkipGlyph, "Skip this video?", time, lead, items,
                     "Type " + string.Join(" or ", display.Options.Select(o => o.Command)));
-            }
-
-            if (display.Options.Count == 0)
-            {
-                // The options are still being looked up.
-                return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, Array.Empty<TickerItem>(), PreparingHint);
             }
 
             var total = display.Options.Sum(o => o.Votes);

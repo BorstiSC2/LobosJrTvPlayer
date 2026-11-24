@@ -72,10 +72,10 @@ namespace YouTubeVideoPlayer
                     playback,
                     playlists,
                     youtube,
-                    TimeSpan.FromSeconds(twitchSettings!.NextVideoVote.DurationSeconds),
+                    TimeSpan.FromSeconds(twitchSettings!.ForceVoteSkip.DurationSeconds),
                     SkipVoteManager.OptionCount)
                 {
-                    RevoteDuration = TimeSpan.FromSeconds(twitchSettings.NextVideoVote.RevoteDurationSeconds)
+                    RevoteDuration = TimeSpan.FromSeconds(twitchSettings.Revote.DurationSeconds)
                 };
                 chatters = new ChatActivityTracker(
                     twitch,
@@ -89,14 +89,18 @@ namespace YouTubeVideoPlayer
                     () => chatterAverage.AverageUniqueChatters,
                     TimeSpan.FromSeconds(twitchSettings.VoteSkip.DurationSeconds),
                     TimeSpan.FromMinutes(twitchSettings.VoteSkip.CooldownMinutes),
-                    twitchSettings.VoteSkip.RequiredPercent);
+                    twitchSettings.VoteSkip.RequiredPercent)
+                {
+                    NextVideoVoteDuration = TimeSpan.FromSeconds(twitchSettings.VoteSkip.NextVideoVoteDurationSeconds)
+                };
                 var runningVoteSkip = voteSkip;
                 autoVote = new AutoVoteManager(
                     twitch,
                     playback,
                     votes,
                     leadTime: TimeSpan.FromSeconds(twitchSettings.AutoVote.LeadTimeSeconds),
-                    isOtherVoteRunning: () => runningVoteSkip.IsRunning);
+                    isOtherVoteRunning: () => runningVoteSkip.IsRunning,
+                    voteDuration: TimeSpan.FromSeconds(twitchSettings.AutoVote.DurationSeconds));
                 announcer = new PlaylistAnnouncer(twitch, playlists, playback);
 
                 var cooldowns = twitchSettings.CommandCooldownSeconds;

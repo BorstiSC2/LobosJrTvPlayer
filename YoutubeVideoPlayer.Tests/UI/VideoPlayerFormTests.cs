@@ -102,7 +102,7 @@ public class VideoPlayerFormTests
         /// <summary>What the vote ticker shows, as one line; <c>null</c> without a ticker.</summary>
         public string? Ticker => TitleStrip.Ticker?.PlainText;
 
-        public Label VolumeLabel => Form.All<Label>().Single(l => l.Size == new Size(100, 40));
+        public OverlayPill VolumeLabel => Form.All<OverlayPill>().Single(l => l.Name == "volume");
 
         public OverlayPill BufferingLabel => Form.All<OverlayPill>().Single(l => l.Name == "buffering");
 
@@ -163,11 +163,13 @@ public class VideoPlayerFormTests
 
         app.Form.Press(Keys.M);
         Assert.True(app.Playback.IsMuted);
-        Assert.Equal("MUTE", app.VolumeLabel.Text);
+        Assert.Equal("Muted", app.VolumeLabel.Text);
+        Assert.Equal(OverlayStyle.MuteGlyph, app.VolumeLabel.Icon);
 
         app.Form.Press(Keys.M);
         Assert.False(app.Playback.IsMuted);
-        Assert.Equal("100%", app.VolumeLabel.Text);
+        Assert.Equal("Volume 100%", app.VolumeLabel.Text);
+        Assert.Equal(OverlayStyle.VolumeGlyph, app.VolumeLabel.Icon);
     }, sta: true);
 
     [Theory]
@@ -180,7 +182,7 @@ public class VideoPlayerFormTests
         app.Form.Press(key);
 
         Assert.Equal(95, app.Playback.Volume);
-        Assert.Equal("Volume: 95%", app.VolumeLabel.Text);
+        Assert.Equal("Volume 95%", app.VolumeLabel.Text);
         Assert.Equal(95, app.Slider.Value);
     }, sta: true);
 
@@ -195,7 +197,7 @@ public class VideoPlayerFormTests
         app.Form.Press(key);
 
         Assert.Equal(55, app.Playback.Volume);
-        Assert.Equal("Volume: 55%", app.VolumeLabel.Text);
+        Assert.Equal("Volume 55%", app.VolumeLabel.Text);
     }, sta: true);
 
     [Fact]
@@ -684,33 +686,59 @@ public class VideoPlayerFormTests
     }
 
     [Fact]
-    public void WhileAVoteRuns_TheStripScrollsItsOptions_InsteadOfTheCard() => UiContext.Run(async () =>
+    public void AVoteThatStartsWhileTheCardIsUp_WaitsUntilTheCardsTimeIsOver_ThenScrollsItsOptions() => UiContext.Run(async () =>
     {
         using var app = VoteApp();
         await app.ShowAsync();
         await app.PressPlayAsync();
-        var title = app.Playback.Current!.Title;
+        await Async.WaitUntilAsync(() => app.Card.Showing, because: "the card follows once the \"Ready\" strip is gone");
         Assert.Null(app.Ticker);
-        Assert.True(app.Card.Showing);
 
         await app.Votes!.StartAsync("mod");
-        await Async.WaitUntilAsync(() => app.Ticker != null);
+        await Async.SettleAsync();
+
+        Assert.True(app.Card.Showing); // the card keeps its time ...
+        Assert.Null(app.Ticker);       // ... and the vote waits for it
+
+        app.Time.Advance(NowPlayingSchedule.ShowDuration);
+        await Async.WaitUntilAsync(() => app.Ticker != null, because: "the ticker follows once the card is gone");
+        Assert.False(app.Card.Visible);
 
         Assert.StartsWith("Vote  |  ", app.Ticker);
         Assert.Contains("1 Option ", app.Ticker);
         Assert.Contains("(0)", app.Ticker);
         Assert.EndsWith("!vote 1–3", app.Ticker);
-        Assert.False(app.Card.Showing); // the ticker has its place
 
         app.Votes.Vote(Chat.Command("!vote 2", user: "viewer"));
         Assert.Contains("(1)", app.Ticker);
         Assert.True(app.TitleStrip.Ticker!.Items[1].Leading);
 
         app.Votes.Cancel(Chat.Command("!cancelvote", user: "mod"));
-
         Assert.Null(app.Ticker);
-        Assert.Equal(title, app.Card.Content!.Title);
-        Assert.True(app.Card.Showing); // still within its time after the start of the video
+    }, sta: true);
+
+    [Fact]
+    public void CurrentDuringAVote_IsDropped_NotShownAfterIt() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        app.Time.Advance(NowPlayingSchedule.ShowDuration); // the card of the start is over
+        await Async.WaitUntilAsync(() => !app.Card.Visible);
+
+        await app.Votes!.StartAsync("mod");
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+
+        app.NowPlaying.Show(); // !current while the ticker is up
+        Assert.False(app.NowPlaying.IsShown);
+        Assert.False(app.Card.Showing);
+
+        app.Votes.Cancel(Chat.Command("!cancelvote", user: "mod"));
+        await Async.WaitUntilAsync(() => !app.TitleStrip.Visible);
+        Assert.False(app.Card.Showing); // not postponed either
+
+        app.NowPlaying.Show(); // after the vote it works again
+        await Async.WaitUntilAsync(() => app.Card.Showing);
     }, sta: true);
 
     [Fact]
@@ -785,8 +813,7 @@ public class VideoPlayerFormTests
         app.Time.Advance(TimeSpan.FromSeconds(5));
 
         await Async.WaitUntilAsync(() => app.Votes.IsRunning && !app.VoteSkip.IsRunning);
-        Assert.StartsWith("Vote  |  ", app.Ticker); // the videos are being picked
-        Assert.EndsWith(VoteTicker.PreparingHint, app.Ticker);
+        Assert.StartsWith("Skip this video?", app.Ticker); // the won !voteskip stays up while the videos are picked
 
         lookup.SetResult(new YouTubeVideoDetails("Option", null));
         await Async.WaitUntilAsync(() => app.Ticker!.EndsWith("!vote 1–3"));
@@ -795,6 +822,36 @@ public class VideoPlayerFormTests
         app.Votes.DisplayChanged -= Check;
         Assert.Empty(gaps);
         Assert.False(app.Card.Showing);
+    }, sta: true);
+
+    [Fact]
+    public void AVote_IsOnlyShownOnceItsOptionsAreKnown_AndKeepsANewCardAwayMeanwhile() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        app.Time.Advance(NowPlayingSchedule.ShowDuration); // the card of the start is over
+        await Async.WaitUntilAsync(() => !app.Card.Visible);
+        var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
+        app.Playlists.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+        var shown = new List<string?>();
+        void Record(object? sender, EventArgs e) => shown.Add(app.Ticker);
+
+        app.Votes!.DisplayChanged += Record;
+        app.Votes.StartAsync("mod").FireAndForget("test vote");
+        await Async.WaitUntilAsync(() => app.Votes.IsRunning);
+        await Async.SettleAsync();
+
+        Assert.Null(app.Ticker); // the options are still being looked up: nothing half-filled
+        app.NowPlaying.Show();   // !current meanwhile
+        Assert.False(app.Card.Showing); // the vote has the place
+
+        lookup.SetResult(new YouTubeVideoDetails("Option", null));
+        await Async.WaitUntilAsync(() => app.Ticker != null);
+
+        app.Votes.DisplayChanged -= Record;
+        Assert.All(shown.Where(t => t != null), t => Assert.EndsWith("!vote 1–3", t)); // only ever with the options
+        Assert.Contains("1 Option ", app.Ticker);
     }, sta: true);
 
     [Fact]
@@ -827,9 +884,10 @@ public class VideoPlayerFormTests
 
         await app.PressPlayAsync();
 
-        Assert.True(app.Card.Showing);
+        await Async.WaitUntilAsync(() => app.Card.Showing, because: "the card follows once the \"Ready\" strip is gone");
         Assert.Equal(app.Playback.Current!.Title, app.Card.Content!.Title);
         Assert.Equal(string.Empty, app.TitleStrip.Title);
+        Assert.False(app.TitleStrip.Visible); // never both at once
 
         app.Time.Advance(NowPlayingSchedule.ShowDuration);
         await Async.WaitUntilAsync(() => !app.Card.Showing);
@@ -860,7 +918,7 @@ public class VideoPlayerFormTests
         using var app = new App();
         await app.ShowAsync();
         await app.PressPlayAsync();
-        Assert.True(app.Card.Showing);
+        await Async.WaitUntilAsync(() => app.Card.Showing);
 
         _ = app.Playback.HoldNextVideo();
         app.Player.EndReached += Raise.Event();

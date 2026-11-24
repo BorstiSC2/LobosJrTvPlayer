@@ -62,6 +62,12 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         public TimeSpan Duration { get; }
 
+        /// <summary>
+        /// How long the vote for the next video runs that a won vote-skip starts; <see cref="SkipVoteManager.Duration"/> if
+        /// not set (<c>voteSkip.nextVideoVoteDurationSeconds</c>).
+        /// </summary>
+        public TimeSpan? NextVideoVoteDuration { get; init; }
+
         public TimeSpan Cooldown { get; }
 
         public int Percent { get; }
@@ -253,7 +259,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private async Task StartNextVideoVoteAsync(VoteSkipSession session)
         {
             // The new vote shows ("being prepared") before this one goes, in the same step, so the ticker never empties.
-            var start = _votes.StartAsync("!voteskip");
+            var start = _votes.StartAsync("!voteskip", NextVideoVoteDuration);
             EndSession(session);
 
             var reply = await start;

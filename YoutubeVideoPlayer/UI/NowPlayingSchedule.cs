@@ -47,12 +47,18 @@ namespace YouTubeVideoPlayer.UI
         public event EventHandler? Changed;
 
         /// <summary>
+        /// Set by the form while a chat vote runs: nothing new is due then. Requests (<c>!current</c>), a new video and
+        /// the regular appearance are dropped, not postponed; a card that is up keeps its time but is not extended.
+        /// </summary>
+        public bool Blocked { get; set; }
+
+        /// <summary>
         /// Shows the card for <see cref="ShowDuration"/> (longer if it is up already) and starts the interval again from
         /// now, so a request does not make the next regular appearance come right after it.
         /// </summary>
         public void Show()
         {
-            if (_disposed)
+            if (_disposed || Blocked)
                 return;
 
             _hideTimer.Start();
