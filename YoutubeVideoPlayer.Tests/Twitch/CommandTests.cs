@@ -42,6 +42,23 @@ public class CurrentCommandTests
             reply);
     }
 
+    [Theory]
+    [InlineData("v1", true, 1)]   // answers about a video: shown on stream too
+    [InlineData("v1", false, 0)]  // "Nothing is playing right now."
+    [InlineData(null, true, 0)]
+    public async Task BringsUpTheNowPlayingCard_OnlyWithAnAnswerAboutAVideo(string? videoId, bool playing, int shown)
+    {
+        var playback = Substitute.For<IPlaybackControl>();
+        playback.Current.Returns(videoId == null ? null : new NowPlaying(videoId, "Elden Ring", null));
+        playback.IsPlaying.Returns(playing);
+        var calls = 0;
+        var command = new CurrentCommand(playback, TimeSpan.FromSeconds(5), () => calls++);
+
+        await command.ExecuteAsync(Chat.Command("!current"));
+
+        Assert.Equal(shown, calls);
+    }
+
     [Fact]
     public async Task UsesHoursForLongVideos()
     {

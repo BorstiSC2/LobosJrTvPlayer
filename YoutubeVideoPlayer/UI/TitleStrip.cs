@@ -400,23 +400,7 @@ namespace YouTubeVideoPlayer.UI
                 style.DrawText(g, ticker.Hint, style.Text, x + space, style.Muted, style.Box);
         }
 
-        private Bitmap? RenderBitmap(int width, Action<Graphics> draw)
-        {
-            var height = Style.Height;
-            if (width <= 0)
-                return null;
-
-            // No alpha channel: GDI text written into an ARGB bitmap would come out transparent.
-            using var rgb = new Bitmap(width, height, PixelFormat.Format32bppRgb);
-            using (var g = Graphics.FromImage(rgb))
-            {
-                g.Clear(Style.Box);
-                draw(g);
-            }
-
-            // Premultiplied ARGB (opaque) is the format GDI+ copies fastest; anything else is converted on every frame.
-            return rgb.Clone(new Rectangle(0, 0, width, height), PixelFormat.Format32bppPArgb);
-        }
+        private Bitmap? RenderBitmap(int width, Action<Graphics> draw) => Style.Render(width, Style.Height, draw);
 
         /// <summary>A new look (another form colour or DPI): everything is rendered again.</summary>
         private void ResetStyle()

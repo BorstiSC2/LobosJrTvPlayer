@@ -20,9 +20,9 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Buffering indicator and buffering timeout
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
-- Video title overlay
+- "Now playing" card: the video's title, position and a progress bar slide in at the bottom left for 12 seconds when a video starts and every 10 minutes after that (and when someone types `!current` in chat); the rest of the time the picture stays clear
 - Twitch chat bot with `!current`, `!forceskip`, `!reload`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
-- While a chat vote runs, a ticker at the bottom of the video shows an orange "Vote" (or "Skip this video?") badge and the time left, and scrolls the options with a live bar and count each, the leader highlighted (it cross-fades with the video title, which has the same look, as do the buffering, reconnecting and waiting labels)
+- While a chat vote runs, a ticker at the bottom of the video shows an orange "Vote" (or "Skip this video?") badge and the time left, and scrolls the options with a live bar and count each, the leader highlighted (in the same look as the "now playing" card and the buffering, reconnecting and waiting labels)
 - Viewers can ask the chat to skip a video with `!voteskip` (`!skip` / `!stay`); it needs a configurable share of the recent chatters, and a vote to stay blocks it for 30 minutes
 
 ---
@@ -119,7 +119,7 @@ The bot joins a Twitch channel's chat and reacts to these commands:
 
 | Command | Who | What it does |
 |---------|-----|--------------|
-| `!current` | everyone | Replies `Now playing: "<title>" – 03:21 / 10:45 (07:24 left) – https://www.youtube.com/watch?v=<id>` (only the position if the length is unknown) |
+| `!current` | everyone | Replies `Now playing: "<title>" – 03:21 / 10:45 (07:24 left) – https://www.youtube.com/watch?v=<id>` (only the position if the length is unknown), and brings up the "now playing" card on stream |
 | `!forceskip` | privileged | Skips to the next video at once, without a vote (the next one in order, or a random one if the playlist is shuffled) |
 | `!reload` | privileged | Gets fresh stream links for the current video and continues it 3 seconds before where it is (a safety measure when picture or sound misbehave; the video shows "Reloading - continuing at 50:28" meanwhile) |
 | `!pause` | privileged | Pauses the current video |

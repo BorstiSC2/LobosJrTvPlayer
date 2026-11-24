@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Linq;
 using System.Windows.Forms;
@@ -58,6 +59,7 @@ namespace YouTubeVideoPlayer.UI
             Text = new Font("Segoe UI", Points(12.5f), GraphicsUnit.Pixel);
             Strong = new Font("Segoe UI Semibold", Points(12.5f), GraphicsUnit.Pixel);
             Small = new Font("Segoe UI Semibold", Points(9), GraphicsUnit.Pixel);
+            Title = new Font("Segoe UI Semibold", Points(16), GraphicsUnit.Pixel);
             Icon = new Font(IconFamily.Value, Points(11.5f), GraphicsUnit.Pixel);
         }
 
@@ -76,6 +78,9 @@ namespace YouTubeVideoPlayer.UI
 
         public Font Small { get; }
 
+        /// <summary>The title on the "now playing" card.</summary>
+        public Font Title { get; }
+
         public Font Icon { get; }
 
         public int Height => Scale(36);
@@ -92,8 +97,33 @@ namespace YouTubeVideoPlayer.UI
             text.Length == 0 ? 0 : TextRenderer.MeasureText(text, font, Size.Empty, Flags).Width;
 
         public void DrawText(Graphics g, string text, Font font, int x, Color color, Color back, int width = int.MaxValue / 2, bool ellipsis = false) =>
-            TextRenderer.DrawText(g, text, font, new Rectangle(x, 0, width, Height), color, back,
+            DrawText(g, text, font, new Rectangle(x, 0, width, Height), color, back, ellipsis);
+
+        /// <summary>Text centred vertically in <paramref name="bounds"/> (for rows other than the strip's one row).</summary>
+        public static void DrawText(Graphics g, string text, Font font, Rectangle bounds, Color color, Color back, bool ellipsis = false) =>
+            TextRenderer.DrawText(g, text, font, bounds, color, back,
                 Flags | (ellipsis ? TextFormatFlags.EndEllipsis : TextFormatFlags.Default));
+
+        /// <summary>
+        /// Renders something once into a bitmap on the box colour, so a frame only has to copy it. <c>null</c> for an empty
+        /// width.
+        /// </summary>
+        public Bitmap? Render(int width, int height, Action<Graphics> draw)
+        {
+            if (width <= 0 || height <= 0)
+                return null;
+
+            // No alpha channel: GDI text written into an ARGB bitmap would come out transparent.
+            using var rgb = new Bitmap(width, height, PixelFormat.Format32bppRgb);
+            using (var g = Graphics.FromImage(rgb))
+            {
+                g.Clear(Box);
+                draw(g);
+            }
+
+            // Premultiplied ARGB (opaque) is the format GDI+ copies fastest; anything else is converted on every frame.
+            return rgb.Clone(new Rectangle(0, 0, width, height), PixelFormat.Format32bppPArgb);
+        }
 
         /// <summary>The orange badge: an icon and, if given, a word.</summary>
         public int BadgeWidth(char icon, string? label) =>
@@ -171,17 +201,7 @@ namespace YouTubeVideoPlayer.UI
                 at += Gap;
                 var width = Scale(46);
                 var height = Math.Max(2, Scale(4));
-                var top = (Height - height) / 2;
-                using (var track = new SolidBrush(Faint))
-                    FillRounded(g, track, new RectangleF(at, top, width, height));
-
-                var filled = (float)(width * Math.Clamp(share, 0, 1));
-                if (filled > 0.5f)
-                {
-                    using var bar = new SolidBrush(item.Leading ? Color.White : AccentSoft);
-                    FillRounded(g, bar, new RectangleF(at, top, Math.Max(filled, height), height));
-                }
-
+                DrawBar(g, new Rectangle(at, (Height - height) / 2, width, height), share, item.Leading ? Color.White : AccentSoft);
                 at += width;
             }
 
@@ -189,6 +209,20 @@ namespace YouTubeVideoPlayer.UI
                 DrawText(g, item.Count, Strong, at + Scale(7), item.Leading ? Color.White : AccentSoft, Box);
 
             return ItemWidth(item);
+        }
+
+        /// <summary>A rounded bar: the track in <see cref="Faint"/>, the share (0 to 1) of it filled in <paramref name="fill"/>.</summary>
+        public void DrawBar(Graphics g, Rectangle bounds, double share, Color fill)
+        {
+            using (var track = new SolidBrush(Faint))
+                FillRounded(g, track, bounds);
+
+            var filled = (float)(bounds.Width * Math.Clamp(share, 0, 1));
+            if (filled > 0.5f)
+            {
+                using var bar = new SolidBrush(fill);
+                FillRounded(g, bar, new RectangleF(bounds.X, bounds.Y, Math.Max(filled, bounds.Height), bounds.Height));
+            }
         }
 
         private static void FillRounded(Graphics g, Brush brush, RectangleF rect)
@@ -219,6 +253,7 @@ namespace YouTubeVideoPlayer.UI
             Text.Dispose();
             Strong.Dispose();
             Small.Dispose();
+            Title.Dispose();
             Icon.Dispose();
         }
     }

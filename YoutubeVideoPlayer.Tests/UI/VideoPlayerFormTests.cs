@@ -28,8 +28,8 @@ public class VideoPlayerFormTests
     {
         public TestableForm(PlaybackManager playback, PlaylistManager playlists, AppCoordinator coordinator,
             TwitchChatService? twitch, TwitchTokenManager? tokens, string botName, AutoVoteManager? autoVote = null,
-            IReadOnlyList<IVoteDisplay>? voteDisplays = null)
-            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays)
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null, NowPlayingSchedule? nowPlaying = null)
+            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays, nowPlaying)
         {
         }
 
@@ -63,9 +63,10 @@ public class VideoPlayerFormTests
             }
 
             Coordinator = new AppCoordinator(Playback, PlaylistManager, Twitch);
+            NowPlaying = new NowPlayingSchedule(Playback, Time);
             Form = new TestableForm(
                 Playback, PlaylistManager, Coordinator, Twitch, tokens, "lobosbot", AutoVote,
-                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes });
+                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes }, NowPlaying);
         }
 
         public PlaylistSetup Playlists { get; }
@@ -93,6 +94,10 @@ public class VideoPlayerFormTests
         public TestableForm Form { get; }
 
         public TitleStrip TitleStrip => Form.All<TitleStrip>().Single();
+
+        public NowPlayingSchedule NowPlaying { get; }
+
+        public NowPlayingCard Card => Form.All<NowPlayingCard>().Single();
 
         /// <summary>What the vote ticker shows, as one line; <c>null</c> without a ticker.</summary>
         public string? Ticker => TitleStrip.Ticker?.PlainText;
@@ -139,6 +144,7 @@ public class VideoPlayerFormTests
         public void Dispose()
         {
             Form.Dispose();
+            NowPlaying.Dispose();
             AutoVote?.Dispose();
             VoteSkip?.Dispose();
             Votes?.Dispose();
@@ -417,7 +423,8 @@ public class VideoPlayerFormTests
 
         await app.PressPlayAsync();
 
-        Assert.StartsWith("Title a", app.TitleStrip.Title);
+        Assert.Equal(string.Empty, app.TitleStrip.Title); // the title is on the card now
+        Assert.StartsWith("Title a", app.Card.Content!.Title);
         Assert.Equal("Pause", app.Form.All<Button>().Single(b => b.Text == "Pause").Text);
     }, sta: true);
 
@@ -677,13 +684,14 @@ public class VideoPlayerFormTests
     }
 
     [Fact]
-    public void WhileAVoteRuns_TheStripScrollsItsOptions_AndTheTitleComesBackAfterwards() => UiContext.Run(async () =>
+    public void WhileAVoteRuns_TheStripScrollsItsOptions_InsteadOfTheCard() => UiContext.Run(async () =>
     {
         using var app = VoteApp();
         await app.ShowAsync();
         await app.PressPlayAsync();
         var title = app.Playback.Current!.Title;
         Assert.Null(app.Ticker);
+        Assert.True(app.Card.Showing);
 
         await app.Votes!.StartAsync("mod");
         await Async.WaitUntilAsync(() => app.Ticker != null);
@@ -692,7 +700,7 @@ public class VideoPlayerFormTests
         Assert.Contains("1 Option ", app.Ticker);
         Assert.Contains("(0)", app.Ticker);
         Assert.EndsWith("!vote 1–3", app.Ticker);
-        Assert.Equal(title, app.TitleStrip.Title); // kept behind the ticker
+        Assert.False(app.Card.Showing); // the ticker has its place
 
         app.Votes.Vote(Chat.Command("!vote 2", user: "viewer"));
         Assert.Contains("(1)", app.Ticker);
@@ -701,7 +709,8 @@ public class VideoPlayerFormTests
         app.Votes.Cancel(Chat.Command("!cancelvote", user: "mod"));
 
         Assert.Null(app.Ticker);
-        Assert.Equal(title, app.TitleStrip.Title);
+        Assert.Equal(title, app.Card.Content!.Title);
+        Assert.True(app.Card.Showing); // still within its time after the start of the video
     }, sta: true);
 
     [Fact]
@@ -747,7 +756,7 @@ public class VideoPlayerFormTests
     }, sta: true);
 
     [Fact]
-    public void ANewVideoDuringAVote_UpdatesTheTitleBehindTheTicker() => UiContext.Run(async () =>
+    public void ANewVideoDuringAVote_UpdatesTheCardBehindTheTicker() => UiContext.Run(async () =>
     {
         using var app = VoteApp();
         await app.ShowAsync();
@@ -764,7 +773,61 @@ public class VideoPlayerFormTests
         await Async.WaitUntilAsync(() => !ReferenceEquals(app.Playback.Current, first) && app.Playback.Current != null);
 
         Assert.NotNull(app.Ticker);
-        Assert.Equal(app.Playback.Current!.Title, app.TitleStrip.Title);
+        Assert.Equal(app.Playback.Current!.Title, app.Card.Content!.Title);
+        Assert.False(app.Card.Showing);
+    }, sta: true);
+
+    [Fact]
+    public void TheCard_ShowsTheVideoWhenItStarts_AndSlidesOutAfterItsTime() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        Assert.False(app.Card.Showing); // standing by: the strip says "Ready"
+
+        await app.PressPlayAsync();
+
+        Assert.True(app.Card.Showing);
+        Assert.Equal(app.Playback.Current!.Title, app.Card.Content!.Title);
+        Assert.Equal(string.Empty, app.TitleStrip.Title);
+
+        app.Time.Advance(NowPlayingSchedule.ShowDuration);
+        await Async.WaitUntilAsync(() => !app.Card.Showing);
+
+        app.NowPlaying.Show(); // what !current does
+        Assert.True(app.Card.Showing);
+    }, sta: true);
+
+    [Fact]
+    public void TheCard_FollowsThePosition_WhileItIsUp() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        var ms = 0L;
+        app.Player.TimeMs.Returns(_ => ms);
+        app.Player.LengthMs.Returns(180_000);
+
+        ms = 65_000;
+
+        await Async.WaitUntilAsync(() => app.Card.Content!.Position == TimeSpan.FromSeconds(65), because: "the card is updated every second");
+        Assert.Contains("1:05 / 3:00", app.Card.PlainText);
+    }, sta: true);
+
+    [Fact]
+    public void WhileTheNextVideoWaitsForAVote_TheCardIsNotShown() => UiContext.Run(async () =>
+    {
+        using var app = new App();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        Assert.True(app.Card.Showing);
+
+        _ = app.Playback.HoldNextVideo();
+        app.Player.EndReached += Raise.Event();
+        await Async.WaitUntilAsync(() => app.Playback.IsWaitingForHold);
+
+        Assert.False(app.Card.Showing);
+        app.NowPlaying.Show();
+        Assert.False(app.Card.Showing);
     }, sta: true);
 
     #endregion
