@@ -20,7 +20,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Buffering indicator and buffering timeout
 - Fail-safe watchdog for frozen playback
 - Automatic skipping of unavailable or invalid videos
-- "Now playing" card: the video's title, position and a progress bar slide in at the bottom left for 12 seconds when a video starts and every 10 minutes after that (and when someone types `!current` in chat); the rest of the time the picture stays clear
+- "Now playing" card: a see-through pill with the video's title, position and a progress ring opens at the bottom left for 12 seconds when a video starts and every 10 minutes after that (and when someone types `!current` in chat); the rest of the time the picture stays clear
 - Twitch chat bot with `!current`, `!forceskip`, `!reload`, `!playlist`, `!skipplaylist`, `!playlistshufflestatus`, `!toggleplaylistshuffle` and chat votes for the next video (`!forcevoteskip`, or automatically with the **Autovote** checkbox, which `!autovotestatus` and `!toggleautovote` also report and switch); `!vodcommands` and `!modvodcommands` list what the bot can do
 - While a chat vote runs, a ticker at the bottom of the video shows an orange "Vote" (or "Skip this video?") badge and the time left, and scrolls the options with a live bar and count each, the leader highlighted (in the same look as the "now playing" card and the buffering, reconnecting and waiting labels)
 - Viewers can ask the chat to skip a video with `!voteskip` (`!skip` / `!stay`); it needs a configurable share of the recent chatters, and a vote to stay blocks it for 30 minutes

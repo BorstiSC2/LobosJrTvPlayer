@@ -60,6 +60,7 @@ namespace YouTubeVideoPlayer.UI
             Strong = new Font("Segoe UI Semibold", Points(12.5f), GraphicsUnit.Pixel);
             Small = new Font("Segoe UI Semibold", Points(9), GraphicsUnit.Pixel);
             Title = new Font("Segoe UI Semibold", Points(16), GraphicsUnit.Pixel);
+            Caption = new Font("Segoe UI", Points(10), GraphicsUnit.Pixel);
             Icon = new Font(IconFamily.Value, Points(11.5f), GraphicsUnit.Pixel);
         }
 
@@ -80,6 +81,9 @@ namespace YouTubeVideoPlayer.UI
 
         /// <summary>The title on the "now playing" card.</summary>
         public Font Title { get; }
+
+        /// <summary>The second row of the "now playing" card.</summary>
+        public Font Caption { get; }
 
         public Font Icon { get; }
 
@@ -254,6 +258,7 @@ namespace YouTubeVideoPlayer.UI
             Strong.Dispose();
             Small.Dispose();
             Title.Dispose();
+            Caption.Dispose();
             Icon.Dispose();
         }
     }

@@ -12,6 +12,8 @@
 	<FileVersion>2.2.0</FileVersion>
 	<InformationalVersion>2.1.0</InformationalVersion>
 	<ApplicationIcon>LobosJrTvTwitchIcon.ico</ApplicationIcon>
+	<!-- Declares Windows 8 to 11: needed for the layered child window of the "now playing" card. -->
+	<ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>

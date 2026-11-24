@@ -17,9 +17,9 @@ public class NowPlayingCardTests
     {
         private readonly Form _form = new() { Width = 800, Height = 400 };
 
-        public Host()
+        public Host(bool layered = true)
         {
-            Card = new NowPlayingCard(Time);
+            Card = new NowPlayingCard(Time, layered);
             _form.Controls.Add(Card);
             _form.ShowHidden();
             Card.AvailableWidth = Available;
@@ -40,7 +40,7 @@ public class NowPlayingCardTests
             }
         }
 
-        /// <summary>Runs the slide to its end.</summary>
+        /// <summary>Runs the animation to its end.</summary>
         public void Finish() => Run(TimeSpan.FromSeconds(1));
 
         public void Dispose() => _form.Dispose();
@@ -53,29 +53,61 @@ public class NowPlayingCardTests
     }
 
     [Fact]
-    public void SlidesInFromTheLeftEdge_IntoItsPlace() => UiContext.Run(() =>
+    public void ItsWindow_IsCreatedWhenItFirstShows_LayeredOrNot() => UiContext.Run(() =>
+    {
+        using var host = new Host();
+        host.Card.Content = Video;
+
+        host.Card.Showing = true;
+
+        // Layered only with a manifest that declares Windows 8 or later (the app has one, and so has the test host).
+        Assert.True(host.Card.IsHandleCreated);
+    }, sta: true);
+
+    [Fact]
+    public void WithoutALayeredWindow_ItOpensAndClosesTheSame() => UiContext.Run(() =>
+    {
+        using var host = new Host(layered: false);
+        host.Card.Content = Video;
+
+        host.Card.Showing = true;
+        host.Finish();
+        Assert.False(host.Card.IsLayered);
+        Assert.True(host.Card.Visible);
+        Assert.Equal(host.Card.CardWidth, host.Card.PillWidth);
+
+        host.Card.Showing = false;
+        host.Finish();
+        Assert.False(host.Card.Visible);
+    }, sta: true);
+
+    [Fact]
+    public void Opens_InPlace_GrowingOutOfTheCircle() => UiContext.Run(() =>
     {
         using var host = new Host();
         host.Card.Content = Video;
         Assert.False(host.Card.Visible);
-        Assert.True(host.Card.Right <= 0); // waiting outside the form
+        AssertInPlace(host.Card); // it does not move, it opens
 
         host.Card.Showing = true;
         Assert.True(host.Card.Visible);
         Assert.True(host.Card.IsClockRunning);
+        Assert.Equal(host.Card.CardHeight, host.Card.PillWidth); // a circle
 
-        host.Run(NowPlayingCard.SlideInDuration / 2);
-        Assert.InRange(host.Card.Left, -host.Card.Width + 1, BottomLeft.X - 1); // on its way
-        Assert.Equal(BottomLeft.Y, host.Card.Bottom);
+        host.Run(NowPlayingCard.OpenDuration / 2);
+        Assert.InRange(host.Card.PillWidth, host.Card.CardHeight + 1, host.Card.CardWidth - 1); // on its way
+        AssertInPlace(host.Card);
 
         host.Finish();
+        Assert.Equal(1, host.Card.Progress);
+        Assert.Equal(host.Card.CardWidth, host.Card.PillWidth);
         AssertInPlace(host.Card);
         Assert.False(host.Card.IsAnimating);
         Assert.False(host.Card.IsClockRunning);
     }, sta: true);
 
     [Fact]
-    public void SlidesOut_HidesAndStopsTheClock() => UiContext.Run(() =>
+    public void Closes_HidesAndStopsTheClock() => UiContext.Run(() =>
     {
         using var host = new Host();
         host.Card.Content = Video;
@@ -83,36 +115,36 @@ public class NowPlayingCardTests
         host.Finish();
 
         host.Card.Showing = false;
-        host.Run(NowPlayingCard.SlideOutDuration / 2);
+        host.Run(NowPlayingCard.CloseDuration / 2);
         Assert.True(host.Card.Visible);
-        Assert.True(host.Card.Left < BottomLeft.X);
+        Assert.True(host.Card.PillWidth < host.Card.CardWidth);
 
         host.Finish();
         Assert.False(host.Card.Visible);
-        Assert.True(host.Card.Right <= 0);
+        Assert.Equal(0, host.Card.Progress);
         Assert.False(host.Card.IsClockRunning);
-        Assert.Equal(Video, host.Card.Content); // kept: it slid out with its text
+        Assert.Equal(Video, host.Card.Content); // kept: it closed with its text
     }, sta: true);
 
     [Fact]
-    public void ASlideThatTurnsAround_ContinuesFromWhereTheCardIs() => UiContext.Run(() =>
+    public void AnAnimationThatTurnsAround_ContinuesFromWhereItIs() => UiContext.Run(() =>
     {
         using var host = new Host();
         host.Card.Content = Video;
         host.Card.Showing = true;
-        host.Run(NowPlayingCard.SlideInDuration / 2);
-        var left = host.Card.Left;
+        host.Run(NowPlayingCard.OpenDuration / 2);
+        var progress = host.Card.Progress;
 
         host.Card.Showing = false;
         host.Run(TimeSpan.FromMilliseconds(10));
 
-        Assert.InRange(host.Card.Left, left - host.Card.Width / 4, left); // a small step back, no jump
+        Assert.InRange(host.Card.Progress, progress - 0.05, progress - 0.001); // a small step back, no jump
         host.Finish();
         Assert.False(host.Card.Visible);
     }, sta: true);
 
     [Fact]
-    public void WithoutContent_ItStaysOut() => UiContext.Run(() =>
+    public void WithoutContent_ItStaysClosed() => UiContext.Run(() =>
     {
         using var host = new Host();
 
@@ -120,6 +152,7 @@ public class NowPlayingCardTests
         host.Finish();
 
         Assert.False(host.Card.Visible);
+        Assert.Equal(0, host.Card.Progress);
     }, sta: true);
 
     [Fact]
@@ -129,7 +162,7 @@ public class NowPlayingCardTests
         host.Card.Content = Video with { Title = "Hi" };
         var minimum = host.Card.Width;
 
-        host.Card.Content = Video with { Title = "A considerably longer title of a video" };
+        host.Card.Content = Video with { Title = "A considerably longer title of a video, with a few more words" };
         var longer = host.Card.Width;
 
         host.Card.Content = Video with { Title = new string('W', 300) };
@@ -159,12 +192,12 @@ public class NowPlayingCardTests
         using var host = new Host();
 
         host.Card.Content = Video;
-        Assert.Equal("NOW PLAYING 12:04 / 45:10 | Some video", host.Card.PlainText);
+        Assert.Equal("Now playing · 12:04 / 45:10 | Some video", host.Card.PlainText);
 
         host.Card.Content = Video with { Length = null };
-        Assert.Equal("NOW PLAYING 12:04 | Some video", host.Card.PlainText);
+        Assert.Equal("Now playing · 12:04 | Some video", host.Card.PlainText);
 
         host.Card.Content = Video with { Position = TimeSpan.FromHours(2), Length = TimeSpan.FromHours(1) };
-        Assert.Equal("NOW PLAYING 1:00:00 / 1:00:00 | Some video", host.Card.PlainText);
+        Assert.Equal("Now playing · 1:00:00 / 1:00:00 | Some video", host.Card.PlainText);
     }, sta: true);
 }
