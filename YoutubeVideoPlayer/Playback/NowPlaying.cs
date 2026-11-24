@@ -42,6 +42,16 @@ namespace YouTubeVideoPlayer.Playback
         event EventHandler<NowPlaying>? NowPlayingChanged;
 
         /// <summary>
+        /// A video asked for with <see cref="PlayVideoAsync"/> or <see cref="QueueNextVideo"/> (a vote winner) did not play,
+        /// and the regular next video plays instead: it could not be looked up, or it stopped by itself (player error,
+        /// buffering timeout, broken stream, freeze) before it had played <see cref="PlaybackManager.FailedStartWindow"/>.
+        /// The argument is its ID. Raised once the video that plays instead has started (after <see cref="NowPlayingChanged"/>),
+        /// so it is <see cref="Current"/>. Not raised when an explicit choice replaced the winner (a skip or a playlist switch
+        /// while it was looked up, another vote's winner).
+        /// </summary>
+        event EventHandler<string>? RequestedVideoFailed;
+
+        /// <summary>
         /// Keeps the next video from starting when the current one ends, until the returned hold is released
         /// (a vote about the next video that lasts longer than the current video). Meanwhile the screen is black
         /// and <see cref="IsWaitingForHold"/> is <c>true</c>. An explicit skip or another video ends the hold.

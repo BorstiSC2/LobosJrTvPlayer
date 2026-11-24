@@ -73,7 +73,10 @@ namespace YouTubeVideoPlayer
                     playlists,
                     youtube,
                     TimeSpan.FromSeconds(twitchSettings!.NextVideoVote.DurationSeconds),
-                    SkipVoteManager.OptionCount);
+                    SkipVoteManager.OptionCount)
+                {
+                    RevoteDuration = TimeSpan.FromSeconds(twitchSettings.NextVideoVote.RevoteDurationSeconds)
+                };
                 chatters = new ChatActivityTracker(
                     twitch,
                     TimeSpan.FromMinutes(twitchSettings.ChatterAverage.WindowMinutes),

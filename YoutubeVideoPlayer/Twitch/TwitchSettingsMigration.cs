@@ -48,6 +48,8 @@ namespace YouTubeVideoPlayer.Twitch
         /// <summary>
         /// Version 1 → 2: the sign-in in its own section, one cooldown per command (the old shared values are copied to
         /// each command that used them; the mod commands that change what plays share one), and a section per vote.
+        /// Settings that are new in version 2 (<c>nextVideoVote.revoteDurationSeconds</c>) have no older key: they stay
+        /// missing, so their defaults apply.
         /// </summary>
         private static JObject FromVersion1(JObject old)
         {

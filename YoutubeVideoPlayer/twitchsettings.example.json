@@ -29,7 +29,8 @@
     "commandHelp": 5
   },
   "nextVideoVote": {
-    "durationSeconds": 120
+    "durationSeconds": 120,
+    "revoteDurationSeconds": 45
   },
   "autoVote": {
     "leadTimeSeconds": 300

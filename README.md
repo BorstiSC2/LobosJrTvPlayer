@@ -156,6 +156,8 @@ The bot also announces itself: it posts a message when it first connects, anothe
 - When the time is up, the option with the most votes plays. A tie is broken randomly, and if nobody voted, one of the options is picked randomly. The bot announces the result in chat.
 - The options never include the video that is currently playing. Unavailable videos are replaced automatically.
 - Only one vote can run at a time.
+- If the winner cannot be played (YouTube does not deliver it, or it stops by itself within its first 30 seconds), the next regular video plays, and the chat votes again right away: a shorter vote (45 seconds, `nextVideoVote.revoteDurationSeconds`) that says which video failed and leaves it out. Its winner plays at once. If that winner fails too, there is one more revote; after that the regular video stays. There is no revote while another vote runs or the chat is not connected.
+- When the current video ends while the winner is still being loaded, the player waits for the winner instead of starting another video.
 
 ### Vote to skip
 
@@ -229,7 +231,8 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
     "commandHelp": 5
   },
   "nextVideoVote": {
-    "durationSeconds": 120
+    "durationSeconds": 120,
+    "revoteDurationSeconds": 45
   },
   "autoVote": {
     "leadTimeSeconds": 300
@@ -258,6 +261,7 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
   - `voteSkip` only limits how often the bot answers `!voteskip`; how long `!voteskip` is blocked after the chat chose to stay is `voteSkip.cooldownMinutes`.
   - `!forcevoteskip`, `!cancelvote` and the ballots `!vote`, `!skip` and `!stay` have no cooldown.
 - `nextVideoVote.durationSeconds`: 15 to 1800 (default 120); how long a vote about the next video runs (`!forcevoteskip`, the Autovote, a successful `!voteskip`), counted from the moment the last option has been posted.
+- `nextVideoVote.revoteDurationSeconds`: 15 to 600 (default 45); how long the vote runs that repeats a vote whose winner could not be played (counted the same way). It is new in version 2, so a migrated file does not contain it and the default applies until you add it.
 - `autoVote.leadTimeSeconds`: 60 to 3600 (default 300); how long before the end of a video the Autovote starts its vote. The automatic playlist swap happens 30 seconds earlier.
 - `voteSkip.durationSeconds`: 15 to 600 (default 60); how long a `!voteskip` vote runs.
 - `voteSkip.requiredPercent`: 1 to 100 (default 75); the share of the recent chatters that has to vote `!skip`.

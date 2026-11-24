@@ -76,6 +76,7 @@ public class TwitchSettingsTests
         Assert.Equal(5, c.CommandHelp);
 
         Assert.Equal(120, settings.NextVideoVote.DurationSeconds);
+        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds);
         Assert.Equal(300, settings.AutoVote.LeadTimeSeconds);
         Assert.Equal(60, settings.VoteSkip.DurationSeconds);
         Assert.Equal(75, settings.VoteSkip.RequiredPercent);
@@ -100,6 +101,9 @@ public class TwitchSettingsTests
     [InlineData("nextVideoVote", "durationSeconds", 1, 15)]
     [InlineData("nextVideoVote", "durationSeconds", 120, 120)]
     [InlineData("nextVideoVote", "durationSeconds", 99999, 1800)]
+    [InlineData("nextVideoVote", "revoteDurationSeconds", 1, 15)]
+    [InlineData("nextVideoVote", "revoteDurationSeconds", 30, 30)]
+    [InlineData("nextVideoVote", "revoteDurationSeconds", 99999, 600)]
     [InlineData("autoVote", "leadTimeSeconds", 1, 60)]
     [InlineData("autoVote", "leadTimeSeconds", 420, 420)]
     [InlineData("autoVote", "leadTimeSeconds", 99999, 3600)]
@@ -119,6 +123,7 @@ public class TwitchSettingsTests
             ("voteSkip", "requiredPercent") => settings.VoteSkip.RequiredPercent,
             ("voteSkip", "durationSeconds") => settings.VoteSkip.DurationSeconds,
             ("chatterAverage", "windowMinutes") => settings.ChatterAverage.WindowMinutes,
+            ("nextVideoVote", "revoteDurationSeconds") => settings.NextVideoVote.RevoteDurationSeconds,
             ("nextVideoVote", _) => settings.NextVideoVote.DurationSeconds,
             ("autoVote", _) => settings.AutoVote.LeadTimeSeconds,
             (_, "voteInfo") => settings.CommandCooldownSeconds.VoteInfo,
@@ -177,6 +182,7 @@ public class TwitchSettingsTests
         Assert.True(settings.UsesAppSignIn);
         Assert.Equal(2, settings.PrivilegedUsers.Count);
         Assert.Equal(300, settings.AutoVote.LeadTimeSeconds);
+        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds);
         Assert.Equal(before, File.ReadAllBytes(path)); // already the current version: nothing to migrate
         Assert.Single(Directory.GetFiles(dir.Path));
     }
@@ -255,6 +261,7 @@ public class TwitchSettingsTests
         Assert.Equal(7, c.CommandHelp);
 
         Assert.Equal(90, settings.NextVideoVote.DurationSeconds);
+        Assert.Equal(45, settings.NextVideoVote.RevoteDurationSeconds); // new in version 2: no old key, the default
         Assert.Equal(240, settings.AutoVote.LeadTimeSeconds);
         Assert.Equal(45, settings.VoteSkip.DurationSeconds);
         Assert.Equal(60, settings.VoteSkip.RequiredPercent);

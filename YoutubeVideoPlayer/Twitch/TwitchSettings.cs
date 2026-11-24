@@ -143,6 +143,12 @@ namespace YouTubeVideoPlayer.Twitch
         {
             /// <summary>How long the vote runs (15 to 1800), counted from the moment the last option has been posted.</summary>
             public int DurationSeconds { get; set; } = 120;
+
+            /// <summary>
+            /// How long the vote runs that repeats a vote whose winner could not be played (15 to 600), counted like
+            /// <see cref="DurationSeconds"/>. Shorter, because a video the chat did not choose is playing meanwhile.
+            /// </summary>
+            public int RevoteDurationSeconds { get; set; } = 45;
         }
 
         public sealed class AutoVoteSettings
@@ -281,6 +287,7 @@ namespace YouTubeVideoPlayer.Twitch
 
             CommandCooldownSeconds.Clamp();
             NextVideoVote.DurationSeconds = Math.Clamp(NextVideoVote.DurationSeconds, 15, 1800);
+            NextVideoVote.RevoteDurationSeconds = Math.Clamp(NextVideoVote.RevoteDurationSeconds, 15, 600);
             AutoVote.LeadTimeSeconds = Math.Clamp(AutoVote.LeadTimeSeconds, 60, 3600);
             VoteSkip.DurationSeconds = Math.Clamp(VoteSkip.DurationSeconds, 15, 600);
             VoteSkip.RequiredPercent = Math.Clamp(VoteSkip.RequiredPercent, 1, 100);

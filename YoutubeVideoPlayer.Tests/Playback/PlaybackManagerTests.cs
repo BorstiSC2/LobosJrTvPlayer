@@ -551,6 +551,167 @@ public class PlaybackManagerTests
 
     #endregion
 
+    #region A requested video that did not play (RequestedVideoFailed)
+
+    /// <summary>Records every <see cref="PlaybackManager.RequestedVideoFailed"/> with the video that was current then.</summary>
+    private static List<(string Failed, string? Current)> RecordFailures(PlaybackSetup setup)
+    {
+        var failures = new List<(string, string?)>();
+        setup.Manager.RequestedVideoFailed += (_, id) => failures.Add((id, setup.Manager.Current?.VideoId));
+        return failures;
+    }
+
+    [Fact]
+    public void AWinnerThatCannotBeLookedUp_IsReported_OnceTheVideoThatPlaysInsteadHasStarted() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("random");
+        setup.FailToResolve("winner");
+        var failures = RecordFailures(setup);
+
+        await setup.RunAsync(() => setup.Manager.PlayVideoAsync("winner"));
+
+        Assert.Equal(new[] { "random.video" }, setup.PlayedVideos());
+        Assert.Equal(new[] { ("winner", (string?)"random") }, failures);
+    });
+
+    [Fact]
+    public void AQueuedWinnerThatCannotBeLookedUp_IsReported_OnceTheVideoThatPlaysInsteadHasStarted() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("random");
+        setup.FailToResolve("winner");
+        setup.Manager.QueueNextVideo("winner");
+        var failures = RecordFailures(setup);
+
+        var task = setup.Manager.PlayNextAsync();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        await task;
+
+        Assert.Equal(new[] { "random.video" }, setup.PlayedVideos());
+        Assert.Equal(new[] { ("winner", (string?)"random") }, failures);
+    });
+
+    [Fact]
+    public void TheEndOfTheCurrentVideo_DoesNotCancelAWinnerThatIsBeingLookedUp() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "next");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        var pending = new TaskCompletionSource<ResolvedVideo>();
+        setup.YouTube.ResolveAsync("winner", Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            ((CancellationToken)call[1]).Register(() => pending.TrySetCanceled());
+            return pending.Task;
+        });
+        var failures = RecordFailures(setup);
+
+        var vote = setup.Manager.PlayVideoAsync("winner");
+        await Async.SettleAsync();
+        setup.Player.EndReached += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        Assert.Equal(new[] { "v1.video" }, setup.PlayedVideos()); // no other video in between
+
+        pending.SetResult(PlaybackSetup.Resolved("winner"));
+        await vote;
+
+        Assert.Equal(new[] { "v1.video", "winner.video" }, setup.PlayedVideos());
+        Assert.Empty(failures);
+    });
+
+    [Fact]
+    public void AWinnerThatIsReplacedByAnExplicitSkipWhileItIsLookedUp_IsNotReported() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("next");
+        var pending = new TaskCompletionSource<ResolvedVideo>();
+        setup.YouTube.ResolveAsync("winner", Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            ((CancellationToken)call[1]).Register(() => pending.TrySetCanceled());
+            return pending.Task;
+        });
+        var failures = RecordFailures(setup);
+
+        var vote = setup.Manager.PlayVideoAsync("winner");
+        await Async.SettleAsync();
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        await vote;
+
+        Assert.Equal(new[] { "next.video" }, setup.PlayedVideos());
+        Assert.Empty(failures);
+    });
+
+    [Theory]
+    [InlineData("error")]
+    [InlineData("buffering")]
+    public void AWinnerThatStopsRightAfterItsStart_IsReported(string how) => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("next");
+        await setup.Manager.PlayVideoAsync("winner");
+        var failures = RecordFailures(setup);
+
+        if (how == "error")
+        {
+            setup.Player.EncounteredError += Raise.Event();
+        }
+        else
+        {
+            setup.Player.Buffering += Raise.Event<EventHandler<float>>(setup.Player, 5f);
+            await setup.AdvanceAsync(PlaybackManager.BufferingTimeout);
+        }
+
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(new[] { "winner.video", "next.video" }, setup.PlayedVideos());
+        Assert.Equal(new[] { ("winner", (string?)"next") }, failures);
+    });
+
+    [Fact]
+    public void AQueuedWinnerThatStopsRightAfterItsStart_IsReported() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "next");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        setup.Manager.QueueNextVideo("winner");
+        await setup.RunAsync(setup.Manager.PlayNextAsync);
+        var failures = RecordFailures(setup);
+
+        setup.Player.EncounteredError += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(new[] { "v1.video", "winner.video", "next.video" }, setup.PlayedVideos());
+        Assert.Equal(new[] { ("winner", (string?)"next") }, failures);
+    });
+
+    [Fact]
+    public void AWinnerThatFailsAfterItHasPlayedAWhile_IsNotReported() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("next");
+        await setup.Manager.PlayVideoAsync("winner");
+        var failures = RecordFailures(setup);
+        setup.Player.TimeMs.Returns((long)(PlaybackManager.FailedStartWindow + TimeSpan.FromSeconds(1)).TotalMilliseconds);
+
+        setup.Player.EncounteredError += Raise.Event();
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(new[] { "winner.video", "next.video" }, setup.PlayedVideos());
+        Assert.Empty(failures);
+    });
+
+    [Fact]
+    public void AWinnerThatEnds_AndAnOrdinaryVideoThatFails_AreNotReported() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1", "v2");
+        await setup.Manager.PlayVideoAsync("winner");
+        var failures = RecordFailures(setup);
+
+        setup.Player.EndReached += Raise.Event(); // its regular end (position 0: not an early end)
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+        setup.Player.EncounteredError += Raise.Event(); // v1 was not asked for
+        await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
+
+        Assert.Equal(new[] { "winner.video", "v1.video", "v2.video" }, setup.PlayedVideos());
+        Assert.Empty(failures);
+    });
+
+    #endregion
+
     [Fact]
     public void Operations_AfterDispose_DoNothing() => UiContext.Run(async () =>
     {
