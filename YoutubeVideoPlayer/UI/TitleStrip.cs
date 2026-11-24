@@ -11,7 +11,8 @@ namespace YouTubeVideoPlayer.UI
     /// <summary>
     /// The strip at the bottom left of the video: the video title, or during a chat vote a ticker that scrolls the
     /// options from right to left. Switching between the two cross-fades inside the strip: the old text fades out, the
-    /// box resizes, the new text fades in.
+    /// box resizes, the new text fades in. Another ticker (another vote, or a vote whose options have just been found)
+    /// cross-fades the same way; new counts or a new time in the same ticker do not.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -48,10 +49,12 @@ namespace YouTubeVideoPlayer.UI
         private OverlayStyle? _style;
         private string _title = string.Empty;
         private TickerContent? _ticker;
+        private string? _tickerKey;
         private int _availableWidth = 100;
         private Point _bottomLeft;
 
         private Content _shown = Content.None;
+        private string? _shownTickerKey;
 
         // The standing part (badge, and the time in ticker mode) and the body (the title, or the items that scroll),
         // each rendered once; the keys say what they show, so an unchanged part is not rendered again.
@@ -122,7 +125,8 @@ namespace YouTubeVideoPlayer.UI
                     return;
 
                 _ticker = value;
-                if (_shown == Content.Ticker && Desired == Content.Ticker)
+                _tickerKey = TickerKey(value);
+                if (_shown == Content.Ticker && Desired == Content.Ticker && _tickerKey == _shownTickerKey)
                 {
                     // New counts or time: the items keep scrolling from where they are.
                     Render();
@@ -186,7 +190,7 @@ namespace YouTubeVideoPlayer.UI
         /// <summary>How far the ticker has scrolled since its text entered from the right (wraps after each loop).</summary>
         internal int ScrollOffset => _scrollOffset;
 
-        internal bool IsAnimating => _shown != Desired || _resizing || Size != TargetSize(_shown) || (_shown != Content.None && _alpha < 1);
+        internal bool IsAnimating => IsSwitching || _resizing || Size != TargetSize(_shown) || (_shown != Content.None && _alpha < 1);
 
         internal bool IsClockRunning => _clock.IsRunning;
 
@@ -194,6 +198,19 @@ namespace YouTubeVideoPlayer.UI
             _ticker != null ? Content.Ticker
             : _title.Length > 0 ? Content.Title
             : Content.None;
+
+        /// <summary>Something else has to be shown: the other content, or another ticker.</summary>
+        private bool IsSwitching => _shown != Desired || (_shown == Content.Ticker && _shownTickerKey != _tickerKey);
+
+        /// <summary>
+        /// Which ticker it is: the badge and the items, without counts and time. A ticker with another key is another vote
+        /// (or its options have just been found) and cross-fades; one with the same key only changes in place.
+        /// </summary>
+        private static string? TickerKey(TickerContent? ticker) =>
+            ticker == null
+                ? null
+                : string.Join("\n", new[]{ ticker.Icon.ToString(), ticker.Label, ticker.Lead ?? "", ticker.Hint ?? "" }
+                    .Concat(ticker.Items.Select(i => $"{i.Number} {i.Text}")));
 
         /// <summary>The look, for this display's DPI and the form behind the strip.</summary>
         private OverlayStyle Style => _style ??= new OverlayStyle(DeviceDpi, Parent?.BackColor ?? SystemColors.Control);
@@ -222,13 +239,14 @@ namespace YouTubeVideoPlayer.UI
             var fadeStep = seconds / FadeDuration.TotalSeconds;
 
             var desired = Desired;
-            if (_shown != desired)
+            if (IsSwitching)
             {
                 // The old content fades out first; at zero the new one takes its place (still invisible).
                 _alpha = Math.Max(0, _alpha - fadeStep);
                 if (_alpha <= 0)
                 {
                     _shown = desired;
+                    _shownTickerKey = desired == Content.Ticker ? _tickerKey : null;
                     _scrollOffset = 0;
                     _frameDebt = 0;
                     Render();

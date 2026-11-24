@@ -141,7 +141,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         public void Vote(ChatCommandContext context, bool skip)
         {
             var session = _session;
-            if (session == null)
+            if (session == null || session.Decided)
                 return;
 
             var key = VoterKey(context);
@@ -170,6 +170,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             var session = _session;
             if (session == null)
                 return null;
+
+            if (session.Decided)
+                return $"The chat voted to skip \"{SkipVoteManager.Shorten(session.Video.Title)}\" – the vote for the next video is starting.";
 
             var (skip, stay) = session.Count();
             return $"Vote to skip \"{SkipVoteManager.Shorten(session.Video.Title)}\": !skip {skip}, !stay {stay} – skipping needs " +
@@ -220,17 +223,23 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             if (token.IsCancellationRequested)
                 return;
 
-            EndSession(session);
+            session.Decided = true; // no more ballots
             var (skip, stay) = session.Count();
 
             if (skip > stay && skip >= session.Required)
             {
+                // The result stays on the ticker until the vote for the next video shows: no gap in between, in which the
+                // strip would collapse and the "now playing" card could come up for a moment.
                 Logger.Log($"Vote-skip succeeded: !skip {skip}, !stay {stay} (needed {session.Required}).");
                 await TrySendAsync($"The chat voted to skip \"{title}\" (!skip {skip}, !stay {stay})!");
-                await StartNextVideoVoteAsync();
+                if (token.IsCancellationRequested)
+                    return; // cancelled (!cancelvote) or closing meanwhile
+
+                await StartNextVideoVoteAsync(session);
                 return;
             }
 
+            EndSession(session);
             _cooldownUntil = _time.GetUtcNow() + Cooldown;
             var again = $"!voteskip can be used again in {FormatWait(Cooldown)}.";
             var message = skip > stay
@@ -241,9 +250,13 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         }
 
         /// <summary>The chat wants another video: it votes which one. If that vote cannot start, the next video plays.</summary>
-        private async Task StartNextVideoVoteAsync()
+        private async Task StartNextVideoVoteAsync(VoteSkipSession session)
         {
-            var reply = await _votes.StartAsync("!voteskip");
+            // The new vote shows ("being prepared") before this one goes, in the same step, so the ticker never empties.
+            var start = _votes.StartAsync("!voteskip");
+            EndSession(session);
+
+            var reply = await start;
             if (reply == null)
                 return;
 
@@ -258,8 +271,8 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         private void OnNowPlayingChanged(object? sender, NowPlaying video)
         {
             var session = _session;
-            if (session == null || ReferenceEquals(video, session.Video))
-                return;
+            if (session == null || session.Decided || ReferenceEquals(video, session.Video))
+                return; // a decided vote starts the vote for the next video anyway
 
             // The video the vote was about is gone: there is nothing left to skip.
             EndSession(session);
@@ -337,6 +350,9 @@ namespace YouTubeVideoPlayer.Twitch.Voting
             public double Average { get; }
 
             public DateTimeOffset EndsAt { get; }
+
+            /// <summary>The countdown is over: no more ballots; a won vote waits until the vote for the next video shows.</summary>
+            public bool Decided { get; set; }
 
             public CancellationTokenSource Cancellation { get; } = new();
 

@@ -7,10 +7,14 @@ namespace YouTubeVideoPlayer.UI
     /// <summary>Turns a running vote into what the vote ticker shows.</summary>
     internal static class VoteTicker
     {
+        /// <summary>What the ticker says while a vote's options are still being looked up.</summary>
+        public const string PreparingHint = "Picking the videos to vote on ...";
+
         /// <summary>
         /// A vote for a video: badge "Vote", the time left, the options with number, bar (their share of the votes) and
         /// count, the leader highlighted, and what to type. A skip vote: badge "Skip this video?", the video, <c>!skip</c>
-        /// and <c>!stay</c> with bars measured against the votes skipping needs.
+        /// and <c>!stay</c> with bars measured against the votes skipping needs. A vote whose options are still being looked
+        /// up: badge "Vote" and <see cref="PreparingHint"/>.
         /// </summary>
         public static TickerContent From(VoteDisplay display)
         {
@@ -31,6 +35,12 @@ namespace YouTubeVideoPlayer.UI
                 var lead = display.Subject == null ? null : $"\"{display.Subject}\"";
                 return new TickerContent(OverlayStyle.SkipGlyph, "Skip this video?", time, lead, items,
                     "Type " + string.Join(" or ", display.Options.Select(o => o.Command)));
+            }
+
+            if (display.Options.Count == 0)
+            {
+                // The options are still being looked up.
+                return new TickerContent(OverlayStyle.VoteGlyph, "Vote", time, null, Array.Empty<TickerItem>(), PreparingHint);
             }
 
             var total = display.Options.Sum(o => o.Votes);

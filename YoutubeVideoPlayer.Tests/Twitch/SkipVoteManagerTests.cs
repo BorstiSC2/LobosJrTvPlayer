@@ -796,7 +796,7 @@ public class SkipVoteManagerTests
     #region Display for the vote ticker
 
     [Fact]
-    public void Display_IsNull_UntilTheOptionsAreKnown_ThenShowsThemWithoutTime() => UiContext.Run(async () =>
+    public void Display_ShowsTheVoteBeingPrepared_UntilTheOptionsAreKnown_ThenShowsThemWithoutTime() => UiContext.Run(async () =>
     {
         using var setup = new Setup();
         var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
@@ -807,14 +807,17 @@ public class SkipVoteManagerTests
         var start = setup.Manager.StartAsync(TestSupport.Chat.Command("!forcevoteskip", user: "mod"));
         await Async.SettleAsync();
         Assert.True(setup.Manager.IsRunning);
-        Assert.Null(setup.Manager.Display);
-        Assert.Equal(0, changes);
+        var preparing = setup.Manager.Display!;
+        Assert.Equal(1, changes); // shown from the start: a won !voteskip hands over without a gap
+        Assert.Equal(VoteKind.NextVideo, preparing.Kind);
+        Assert.Empty(preparing.Options);
+        Assert.Null(preparing.TimeLeft);
 
         lookup.SetResult(new YouTubeVideoDetails("Same title", null));
         await start;
 
         var display = setup.Manager.Display!;
-        Assert.Equal(1, changes);
+        Assert.Equal(2, changes);
         Assert.Equal(VoteKind.NextVideo, display.Kind);
         Assert.Equal(
             new (string?, string, string, int)[] { ("1", "Same title", "!vote 1", 0), ("2", "Same title", "!vote 2", 0), ("3", "Same title", "!vote 3", 0) },
@@ -886,6 +889,22 @@ public class SkipVoteManagerTests
             setup.Manager.Dispose();
             Assert.Null(setup.Manager.Display);
         }
+    });
+
+    [Fact]
+    public void Display_IsGone_WhenTheVoteCannotStartAfterAll() => UiContext.Run(async () =>
+    {
+        using var setup = new Setup();
+        setup.Videos.GetNextVideoIds(Arg.Any<int>(), Arg.Any<string?>()).Returns(new List<string> { "only-one" });
+        var displays = new List<VoteDisplay?>();
+        setup.Manager.DisplayChanged += (_, _) => displays.Add(setup.Manager.Display);
+
+        Assert.NotNull(await setup.Manager.StartAsync(TestSupport.Chat.Command("!forcevoteskip", user: "mod")));
+
+        Assert.Equal(2, displays.Count); // being prepared, then gone
+        Assert.Empty(displays[0]!.Options);
+        Assert.Null(displays[1]);
+        Assert.Null(setup.Manager.Display);
     });
 
     [Fact]

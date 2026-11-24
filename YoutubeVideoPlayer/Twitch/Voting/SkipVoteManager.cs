@@ -69,14 +69,22 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
         public event EventHandler? DisplayChanged;
 
-        /// <summary>The running vote for the vote ticker, once its options are known; <c>null</c> otherwise.</summary>
+        /// <summary>
+        /// The running vote for the vote ticker; <c>null</c> without one. While the options are still being looked up it has
+        /// no options and no time (the ticker says the videos are being picked), so a vote shows from its start: a won
+        /// <c>!voteskip</c> hands over to it without a gap.
+        /// </summary>
         public VoteDisplay? Display
         {
             get
             {
                 var session = _session;
-                if (session == null || session.Options.Count == 0)
+                if (session == null)
                     return null;
+
+                var kind = session.AfterCurrent ? VoteKind.VideoAfterCurrent : VoteKind.NextVideo;
+                if (session.Options.Count == 0)
+                    return new VoteDisplay(kind, Array.Empty<VoteDisplayOption>(), null);
 
                 var counts = new int[session.Options.Count];
                 foreach (var choice in session.Votes.Values)
@@ -86,7 +94,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
                     .Select((o, i) => new VoteDisplayOption($"{i + 1}", Shorten(o.Title), $"!vote {i + 1}", counts[i]))
                     .ToList();
                 TimeSpan? left = session.EndsAt is { } endsAt ? Max(TimeSpan.Zero, endsAt - _time.GetUtcNow()) : null;
-                return new VoteDisplay(session.AfterCurrent ? VoteKind.VideoAfterCurrent : VoteKind.NextVideo, options, left);
+                return new VoteDisplay(kind, options, left);
             }
         }
 
@@ -164,6 +172,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
 
             var session = new VoteSession(duration, afterCurrent, _playback.Current);
             _session = session;
+            OnDisplayChanged(); // "being prepared"
             Logger.Log($"Skip vote started by {startedBy}{(afterCurrent ? " (for the video after the current one)" : string.Empty)}.");
 
             // At once, not after the option lookup: a short video may end while the options are being looked up.
@@ -458,7 +467,7 @@ namespace YouTubeVideoPlayer.Twitch.Voting
         /// </param>
         private void EndSession(VoteSession session, bool releaseHold = true)
         {
-            var wasShown = ReferenceEquals(_session, session) && session.Options.Count > 0;
+            var wasShown = ReferenceEquals(_session, session);
             if (ReferenceEquals(_session, session))
                 _session = null;
 

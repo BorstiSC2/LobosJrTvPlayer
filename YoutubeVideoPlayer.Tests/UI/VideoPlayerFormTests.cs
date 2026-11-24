@@ -756,6 +756,48 @@ public class VideoPlayerFormTests
     }, sta: true);
 
     [Fact]
+    public void AWonVoteSkip_HandsTheTickerToTheVoteForTheNextVideo_WithoutShowingTheCardInBetween() => UiContext.Run(async () =>
+    {
+        using var app = VoteApp();
+        await app.ShowAsync();
+        await app.PressPlayAsync();
+        var lookup = new TaskCompletionSource<YouTubeVideoDetails>();
+        app.Playlists.YouTube.GetVideoAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(lookup.Task);
+
+        // Subscribed after the form, so these see what the form has made of each change.
+        var gaps = new List<string>();
+        void Check(object? sender, EventArgs e)
+        {
+            if (app.TitleStrip.Ticker == null)
+                gaps.Add("no ticker");
+            if (app.Card.Showing)
+                gaps.Add("card");
+        }
+
+        Assert.Null(app.VoteSkip!.Start(Chat.Command("!voteskip"))); // one !skip is enough here
+        app.VoteSkip.DisplayChanged += Check;
+        app.Votes!.DisplayChanged += Check;
+        await Async.SettleAsync();
+        app.Time.Advance(TimeSpan.FromSeconds(30));
+        await Async.SettleAsync();
+        app.Time.Advance(TimeSpan.FromSeconds(25));
+        app.NowPlaying.Show(); // the card is due when the vote ends (!current, or its regular appearance)
+        app.Time.Advance(TimeSpan.FromSeconds(5));
+
+        await Async.WaitUntilAsync(() => app.Votes.IsRunning && !app.VoteSkip.IsRunning);
+        Assert.StartsWith("Vote  |  ", app.Ticker); // the videos are being picked
+        Assert.EndsWith(VoteTicker.PreparingHint, app.Ticker);
+
+        lookup.SetResult(new YouTubeVideoDetails("Option", null));
+        await Async.WaitUntilAsync(() => app.Ticker!.EndsWith("!vote 1–3"));
+
+        app.VoteSkip.DisplayChanged -= Check; // closing ends the vote after the form is gone
+        app.Votes.DisplayChanged -= Check;
+        Assert.Empty(gaps);
+        Assert.False(app.Card.Showing);
+    }, sta: true);
+
+    [Fact]
     public void ANewVideoDuringAVote_UpdatesTheCardBehindTheTicker() => UiContext.Run(async () =>
     {
         using var app = VoteApp();
@@ -764,8 +806,7 @@ public class VideoPlayerFormTests
         var first = app.Playback.Current!;
 
         app.Votes!.StartAfterCurrentAsync(TimeSpan.FromMinutes(2)).FireAndForget("test vote");
-        await Async.WaitUntilAsync(() => app.Ticker != null);
-        Assert.EndsWith("!vote 1–3 for the video after this one", app.Ticker);
+        await Async.WaitUntilAsync(() => app.Ticker?.EndsWith("!vote 1–3 for the video after this one") == true);
 
         app.Playback.SkipAsync().FireAndForget("test skip");
         await Async.SettleAsync();

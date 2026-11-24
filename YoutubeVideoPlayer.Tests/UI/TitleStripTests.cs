@@ -52,8 +52,8 @@ public class TitleStripTests
     }
 
     /// <summary>A ticker with one item.</summary>
-    private static TickerContent Ticker(string text) =>
-        new(OverlayStyle.VoteGlyph, "Vote", null, null, new[] { new TickerItem("1", text, 0, "0", false) }, null);
+    private static TickerContent Ticker(string text, int votes = 0, string? time = null) =>
+        new(OverlayStyle.VoteGlyph, "Vote", time, null, new[] { new TickerItem("1", text, 0, $"{votes}", false) }, null);
 
     private static void AssertAnchored(TitleStrip strip)
     {
@@ -195,16 +195,50 @@ public class TitleStripTests
     public void NewTickerText_KeepsScrollingFromWhereItIs() => UiContext.Run(() =>
     {
         using var host = new Host();
-        host.Strip.Ticker = Ticker("VOTE NOW! 1) A (0)");
+        host.Strip.Ticker = Ticker("A");
         host.Finish();
         var offset = host.Strip.ScrollOffset;
 
-        host.Strip.Ticker = Ticker("VOTE NOW! 1) A (1)");
+        host.Strip.Ticker = Ticker("A", votes: 1, time: "1:00"); // new counts and time: the same vote
 
         Assert.Equal(offset, host.Strip.ScrollOffset);
         Assert.Equal(Content.Ticker, host.Strip.Shown);
         Assert.Equal(1, host.Strip.ContentAlpha);
         Assert.False(host.Strip.IsAnimating);
+    }, sta: true);
+
+    [Fact]
+    public void AnotherTicker_CrossFades_AndStartsScrollingFromTheRight() => UiContext.Run(() =>
+    {
+        using var host = new Host();
+        var skip = new TickerContent(OverlayStyle.SkipGlyph, "Skip this video?", "0:00", "\"Some video\"",
+            new[] { new TickerItem(null, "!skip", 1, "1 of 1", true) }, "Type !skip or !stay");
+        host.Strip.Ticker = skip;
+        host.Finish();
+        Assert.True(host.Strip.ScrollOffset > 0);
+
+        // The vote for the next video takes over (still looking up its options).
+        host.Strip.Ticker = new TickerContent(OverlayStyle.VoteGlyph, "Vote", null, null, Array.Empty<TickerItem>(), "Picking ...");
+        Assert.True(host.Strip.IsAnimating);
+
+        host.Run(TimeSpan.FromMilliseconds(70));
+        Assert.InRange(host.Strip.ContentAlpha, 0.4, 0.6); // the skip vote fades out
+        Assert.Equal(Available, host.Strip.Width); // no resize: both are tickers
+
+        host.Run(TimeSpan.FromMilliseconds(100));
+        Assert.Equal(Content.Ticker, host.Strip.Shown);
+        Assert.InRange(host.Strip.ScrollOffset, 0, 10 * host.Strip.PixelsPerFrame); // started over
+
+        host.Run(TimeSpan.FromMilliseconds(200));
+        Assert.Equal(1, host.Strip.ContentAlpha);
+        Assert.False(host.Strip.IsAnimating);
+
+        // Its options are found: the same badge, but other items, so it cross-fades again.
+        host.Strip.Ticker = Ticker("Option A");
+        Assert.True(host.Strip.IsAnimating);
+        host.Finish();
+        Assert.Equal(1, host.Strip.ContentAlpha);
+        Assert.Equal(Available, host.Strip.Width);
     }, sta: true);
 
     [Fact]

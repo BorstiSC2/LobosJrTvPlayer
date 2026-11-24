@@ -45,6 +45,18 @@ public class VoteTickerTests
         Assert.Null(VoteTicker.From(ThreeOptions(VoteKind.NextVideo, null, 0, 0, 0)).Time);
 
     [Fact]
+    public void WhileTheOptionsAreLookedUp_ItSaysTheVideosAreBeingPicked()
+    {
+        var ticker = VoteTicker.From(new VoteDisplay(VoteKind.NextVideo, Array.Empty<VoteDisplayOption>(), null));
+
+        Assert.Equal(OverlayStyle.VoteGlyph, ticker.Icon);
+        Assert.Equal("Vote", ticker.Label);
+        Assert.Null(ticker.Time);
+        Assert.Empty(ticker.Items);
+        Assert.Equal(VoteTicker.PreparingHint, ticker.Hint);
+    }
+
+    [Fact]
     public void TheAutovote_SaysItIsAboutTheVideoAfterThisOne() =>
         Assert.Equal("!vote 1–3 for the video after this one", VoteTicker.From(ThreeOptions(VoteKind.VideoAfterCurrent, null, 0, 0, 0)).Hint);
 
