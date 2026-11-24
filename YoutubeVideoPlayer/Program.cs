@@ -66,6 +66,8 @@ namespace YouTubeVideoPlayer
             ChatActivityTracker? chatters = null;
             VoteSkipManager? voteSkip = null;
             PlaylistAnnouncer? announcer = null;
+            TwitchStreamClient? streams = null;
+            MainChannelWatcher? mainChannel = null;
             if (twitch != null)
             {
                 votes = new SkipVoteManager(
@@ -103,6 +105,14 @@ namespace YouTubeVideoPlayer
                     isOtherVoteRunning: () => runningVoteSkip.IsRunning,
                     voteDuration: TimeSpan.FromSeconds(twitchSettings.AutoVote.DurationSeconds));
                 announcer = new PlaylistAnnouncer(twitch, playlists, playback);
+
+                // The main channel is only watched through the Twitch API; the bot stays in the VOD chat.
+                if (twitchSettings.MainChannel.Length > 0)
+                {
+                    streams = new TwitchStreamClient(TwitchStreamClient.CredentialsFor(twitchSettings, twitchTokens));
+                    mainChannel = new MainChannelWatcher(twitch, streams, twitchSettings.MainChannel);
+                    mainChannel.Start();
+                }
 
                 var cooldowns = twitchSettings.CommandCooldownSeconds;
                 static TimeSpan Cooldown(int seconds) => TimeSpan.FromSeconds(seconds);
@@ -167,6 +177,8 @@ namespace YouTubeVideoPlayer
             {
                 autoVote?.Dispose();
                 announcer?.Dispose();
+                mainChannel?.Dispose();
+                streams?.Dispose();
                 commands?.Dispose();
                 voteSkip?.Dispose();
                 chatters?.Dispose();

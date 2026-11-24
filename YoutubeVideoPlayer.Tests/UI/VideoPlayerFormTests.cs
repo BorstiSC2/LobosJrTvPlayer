@@ -50,7 +50,7 @@ public class VideoPlayerFormTests
             if (twitchClient != null)
             {
                 Twitch = new TwitchChatService(
-                    twitchSettings ?? new TwitchSettings { Channel = "lobosjr", SignIn = { BotLogin = "lobosbot", OAuthToken = "oauth:x" } },
+                    twitchSettings ?? new TwitchSettings { VodChannel = "lobosjr", SignIn = { BotLogin = "lobosbot", OAuthToken = "oauth:x" } },
                     tokens, twitchClient);
             }
 
@@ -1045,7 +1045,7 @@ public class VideoPlayerFormTests
         var auth = Substitute.For<ITwitchAuthClient>();
         auth.StartDeviceFlowAsync(Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource<DeviceCodeInfo>().Task);
         using var tokens = new TwitchTokenManager(auth, new TwitchTokenStore(dir.Path));
-        using var app = new App(Chat.Client(), tokens, new TwitchSettings { Channel = "lobosjr", SignIn = { ClientId = "cid" } });
+        using var app = new App(Chat.Client(), tokens, new TwitchSettings { VodChannel = "lobosjr", SignIn = { ClientId = "cid" } });
 
         await app.Twitch!.StartAsync();
 

@@ -1,7 +1,8 @@
 {
   "version": 2,
   "enabled": true,
-  "channel": "your_channel",
+  "vodChannel": "your_vod_channel",
+  "mainChannel": "your_main_channel",
   "signIn": {
     "clientId": "your_application_client_id",
     "botLogin": "your_bot_account",

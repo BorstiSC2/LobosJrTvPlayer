@@ -37,14 +37,16 @@ public class TwitchSettingsTests
     {
         var settings = LoadV2("""
             "signIn": { "clientId": "  cid  ", "botLogin": "  LobosBot ", "oauthToken": "  oauth:abc " },
-            "channel": " #LobosJr ",
+            "vodChannel": " #LobosJrTv ",
+            "mainChannel": " #LobosJr ",
             "privilegedUsers": [ " @Carsten ", "", "12345", "   " ]
             """);
 
         Assert.Equal("cid", settings.SignIn.ClientId);
         Assert.Equal("lobosbot", settings.SignIn.BotLogin);
         Assert.Equal("oauth:abc", settings.SignIn.OAuthToken);
-        Assert.Equal("lobosjr", settings.Channel);
+        Assert.Equal("lobosjrtv", settings.VodChannel);
+        Assert.Equal("lobosjr", settings.MainChannel);
         Assert.Equal(new[] { "carsten", "12345" }, settings.PrivilegedUsers);
     }
 
@@ -169,7 +171,7 @@ public class TwitchSettingsTests
         var settings = new TwitchSettings
         {
             Enabled = enabled,
-            Channel = channel,
+            VodChannel = channel,
             SignIn = { ClientId = clientId, BotLogin = bot, OAuthToken = token }
         };
 
@@ -256,7 +258,7 @@ public class TwitchSettingsTests
     {
         Assert.Equal("cid", settings.SignIn.ClientId);
         Assert.Equal("lobosbot", settings.SignIn.BotLogin);
-        Assert.Equal("lobosjr", settings.Channel);
+        Assert.Equal("lobosjr", settings.VodChannel);
         Assert.Equal(new[] { "carsten" }, settings.PrivilegedUsers);
 
         var c = settings.CommandCooldownSeconds;
@@ -329,12 +331,12 @@ public class TwitchSettingsTests
     {
         using var dir = new TempDirectory();
         var path = dir.File(TwitchSettings.FileName);
-        const string json = """{ "version": 99, "channel": "lobosjr", "autoVote": { "leadTimeSeconds": 600 }, "future": true }""";
+        const string json = """{ "version": 99, "vodChannel": "lobosjr", "autoVote": { "leadTimeSeconds": 600 }, "future": true }""";
         File.WriteAllText(path, json);
 
         var settings = TwitchSettings.Load(dir.Path)!;
 
-        Assert.Equal("lobosjr", settings.Channel);
+        Assert.Equal("lobosjr", settings.VodChannel);
         Assert.Equal(600, settings.AutoVote.LeadTimeSeconds);
         Assert.Equal(json, File.ReadAllText(path));
         Assert.Single(Directory.GetFiles(dir.Path));
@@ -365,7 +367,10 @@ public class TwitchSettingsTests
 
         var written = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(path));
         AssertEverySetting(written);
-        Assert.Equal("LobosJr", (string)written["channel"]!); // the file's values stay as they were (not normalized)
+        Assert.Equal("LobosJr", (string)written["vodChannel"]!); // renamed from the pre-release "channel", value as it was
+        Assert.Null(written["channel"]);
+        Assert.Equal("", (string)written["mainChannel"]!); // new: added empty (no check)
+        Assert.Equal("lobosjr", settings.VodChannel);
         Assert.Equal(600, (int)written["autoVote"]!["leadTimeSeconds"]!);
         Assert.Equal(300, (int)written["autoVote"]!["durationSeconds"]!);
         Assert.Equal("mine", (string)written["_note"]!);

@@ -46,7 +46,7 @@ public class TwitchSettingsMigrationTests
             {
               "version": 2,
               "enabled": false,
-              "channel": "chan",
+              "vodChannel": "chan",
               "signIn": { "clientId": "cid", "botLogin": "bot", "oauthToken": "oauth:x" },
               "privilegedUsers": [ "a", "b" ],
               "commandCooldownSeconds": {
@@ -65,7 +65,7 @@ public class TwitchSettingsMigrationTests
 
         // In the documented order, so the written file reads like the example.
         Assert.Equal(
-            new[] { "version", "enabled", "channel", "signIn", "privilegedUsers", "commandCooldownSeconds", "forceVoteSkip", "autoVote", "voteSkip", "chatterAverage" },
+            new[] { "version", "enabled", "vodChannel", "signIn", "privilegedUsers", "commandCooldownSeconds", "forceVoteSkip", "autoVote", "voteSkip", "chatterAverage" },
             result.Properties().Select(p => p.Name));
     }
 
@@ -77,7 +77,7 @@ public class TwitchSettingsMigrationTests
         AssertJson("""
             {
               "version": 2,
-              "channel": "chan",
+              "vodChannel": "chan",
               "commandCooldownSeconds": { "current": 9, "playlist": 9, "voteSkip": 9 },
               "autoVote": { "leadTimeSeconds": 400, "durationSeconds": 300 },
               "voteSkip": { "durationSeconds": 120, "requiredPercent": 65, "nextVideoVoteDurationSeconds": 120 }
@@ -100,7 +100,7 @@ public class TwitchSettingsMigrationTests
     {
         var result = Migrate("""{ "_comment": "my bot", "channel": "chan", "timestampCooldownSeconds": 5 }""", out _);
 
-        Assert.Equal(new[] { "version", "channel", "autoVote", "voteSkip", "_comment", "timestampCooldownSeconds" },
+        Assert.Equal(new[] { "version", "vodChannel", "autoVote", "voteSkip", "_comment", "timestampCooldownSeconds" },
             result.Properties().Select(p => p.Name));
         Assert.Equal("my bot", (string)result["_comment"]!);
     }
@@ -233,5 +233,26 @@ public class TwitchSettingsMigrationTests
 
         Assert.True(JToken.DeepEquals(complete, result));
         Assert.Empty(added);
+    }
+
+    [Fact]
+    public void ThePreReleaseKey_Channel_BecomesVodChannel_InItsPlace()
+    {
+        var file = JObject.Parse("""{ "version": 2, "enabled": true, "Channel": "lobosjrtv", "_note": "x" }""");
+
+        var result = TwitchSettingsMigration.RenamePreReleaseKeys(file);
+
+        Assert.Equal(new[] { "version", "enabled", "vodChannel", "_note" }, result.Properties().Select(p => p.Name));
+        Assert.Equal("lobosjrtv", (string)result["vodChannel"]!);
+        Assert.NotSame(file, result);
+        Assert.Equal("lobosjrtv", (string)file["Channel"]!); // the original is left alone (the caller compares with it)
+    }
+
+    [Fact]
+    public void ThePreReleaseRename_LeavesAFileWithVodChannel_AsItIs()
+    {
+        var file = JObject.Parse("""{ "version": 2, "vodChannel": "a", "channel": "old note" }""");
+
+        Assert.Same(file, TwitchSettingsMigration.RenamePreReleaseKeys(file));
     }
 }

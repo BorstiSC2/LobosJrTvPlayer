@@ -701,8 +701,8 @@ namespace YouTubeVideoPlayer.UI
             var signInHint = _twitch.UsesAppSignIn ? " – click here to sign in" : string.Empty;
             _twitchStatusLabel.Text = _twitch.State switch
             {
-                TwitchConnectionState.Connecting => $"Twitch: connecting to #{_twitch.Channel}...",
-                TwitchConnectionState.Connected => $"Twitch: connected to #{_twitch.Channel} as {_twitch.BotLogin}",
+                TwitchConnectionState.Connecting => $"Twitch: connecting to #{_twitch.VodChannel}...",
+                TwitchConnectionState.Connected => $"Twitch: connected to #{_twitch.VodChannel} as {_twitch.BotLogin}",
                 TwitchConnectionState.LoginFailed => _twitch.UsesAppSignIn
                     ? "Twitch: login failed" + signInHint
                     : "Twitch: login failed (check the token)",

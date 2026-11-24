@@ -83,7 +83,7 @@ namespace YouTubeVideoPlayer.Twitch
 
             var result = new JObject { [VersionKey] = 2 };
             Put(result, "enabled", Take("enabled"));
-            Put(result, "channel", Take("channel"));
+            Put(result, "vodChannel", Take("channel")); // the bot's own channel; mainChannel is new (empty)
 
             var signIn = new JObject();
             Put(signIn, "clientId", Take("clientId"));
@@ -144,6 +144,31 @@ namespace YouTubeVideoPlayer.Twitch
             {
                 if (result.Property(property.Name, StringComparison.OrdinalIgnoreCase) == null)
                     result[property.Name] = property.Value.DeepClone();
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Keys of version 2 that were renamed before version 2 was released (a file written by a development build): the
+        /// value moves to the new name, unless that is there already. Returns the file unchanged if there is nothing to do.
+        /// </summary>
+        public static JObject RenamePreReleaseKeys(JObject settings)
+        {
+            var renames = new[] { ("channel", "vodChannel") };
+            var result = settings;
+            foreach (var (from, to) in renames)
+            {
+                var old = result.Property(from, StringComparison.OrdinalIgnoreCase);
+                if (old == null || result.Property(to, StringComparison.OrdinalIgnoreCase) != null)
+                    continue;
+
+                if (ReferenceEquals(result, settings))
+                    result = (JObject)settings.DeepClone(); // the caller compares with the original to decide on writing
+
+                var property = result.Property(old.Name)!;
+                property.AddAfterSelf(new JProperty(to, property.Value.DeepClone()));
+                property.Remove();
             }
 
             return result;

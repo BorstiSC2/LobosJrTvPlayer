@@ -181,6 +181,16 @@ The **Autovote** checkbox in the control bar (enabled when the Twitch bot is on)
 - There is one vote per video, and nothing happens while the bot is not connected to the chat or another vote is running. Switching playlists drops a queued winner.
 - Unchecking the box only prevents new votes; a vote that is already running finishes. The box starts unchecked on every start.
 
+### Main channel alert
+
+With `mainChannel` set, the bot checks once a minute through the Twitch API whether the main channel is live; it stays in the VOD chat and never joins, reads or writes the main channel's chat.
+
+- When the main channel goes live, the bot posts `ALERT LIVE ON MAIN ALERT – twitch.tv/<main channel>` in the VOD chat, once per stream.
+- A main channel that is live already when the app starts gets no alert; only going live while the app runs counts.
+- A stream that drops and comes back within 10 minutes is the same stream (no second alert); after a longer break it is a new one.
+- While the bot is not connected, the alert waits and follows once it is back (if the main channel is still live).
+- The check uses the bot's own sign-in (no extra permission is needed); with a manual token, Twitch is asked once which application the token belongs to.
+
 ### Setup
 
 #### 1. Create the bot account
@@ -203,7 +213,8 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
 {
   "version": 2,
   "enabled": true,
-  "channel": "your_channel",
+  "vodChannel": "your_vod_channel",
+  "mainChannel": "your_main_channel",
   "signIn": {
     "clientId": "your_application_client_id",
     "botLogin": "your_bot_account",
@@ -254,7 +265,8 @@ Copy `YoutubeVideoPlayer/twitchsettings.example.json` to `YoutubeVideoPlayer/twi
 ```
 
 - `version`: the layout of the file. Leave it as it is: a file of an older layout (without `version`, as in app version 2.2 and earlier) is converted automatically when the app starts, and the original is kept next to it as `twitchsettings.v1.json.bak`. The conversion keeps your values, except the Autovote and `!voteskip` timings, which are set to the new defaults (400 s lead time and 300 s for the Autovote; 2 minutes, 65 % and 2 minutes for `!voteskip` and the vote after it). Settings the file does not have yet are added with their default values, so the file always lists every setting.
-- `channel`: the channel to join.
+- `vodChannel`: the channel the bot lives in (the VOD channel): the only chat it joins, reads and writes.
+- `mainChannel`: optional; the streamer's main channel. The bot does not join it: once a minute it asks Twitch whether it is live, and when it goes live it posts `ALERT LIVE ON MAIN ALERT – twitch.tv/<main channel>` in the VOD chat. Empty: no check.
 - `signIn.clientId`: the Client ID from step 2.
 - `signIn.botLogin`: optional; if set, the sign-in warns when you log in with a different account.
 - `signIn.oauthToken`: leave empty (only for the manual token, see below).

@@ -23,8 +23,18 @@ namespace YouTubeVideoPlayer.Twitch
 
         public bool Enabled { get; set; } = true;
 
-        /// <summary>The channel to join, without the leading <c>#</c>.</summary>
-        public string Channel { get; set; } = string.Empty;
+        /// <summary>
+        /// The channel the bot lives in (the VOD channel), without the leading <c>#</c>: the only chat it joins, reads and
+        /// posts in.
+        /// </summary>
+        public string VodChannel { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The streamer's main channel, without the leading <c>#</c>. The bot never joins it; it only checks through the
+        /// Twitch API whether it went live, and then says so in the VOD chat (<see cref="MainChannelWatcher"/>). Empty: no
+        /// check.
+        /// </summary>
+        public string MainChannel { get; set; } = string.Empty;
 
         /// <summary>How the bot signs in.</summary>
         public SignInSettings SignIn { get; set; } = new();
@@ -60,7 +70,7 @@ namespace YouTubeVideoPlayer.Twitch
         [JsonIgnore]
         public bool IsComplete =>
             Enabled
-            && !string.IsNullOrWhiteSpace(Channel)
+            && !string.IsNullOrWhiteSpace(VodChannel)
             && (UsesAppSignIn
                 || (!string.IsNullOrWhiteSpace(SignIn.BotLogin) && !string.IsNullOrWhiteSpace(SignIn.OAuthToken)));
 
@@ -243,6 +253,9 @@ namespace YouTubeVideoPlayer.Twitch
                 }
                 else
                 {
+                    if (fromVersion == TwitchSettingsMigration.CurrentVersion)
+                        migrated = TwitchSettingsMigration.RenamePreReleaseKeys(migrated);
+
                     var added = new List<string>();
                     migrated = TwitchSettingsMigration.AddMissing(migrated, DefaultJson(), added);
                     if (fromVersion < TwitchSettingsMigration.CurrentVersion)
@@ -334,6 +347,9 @@ namespace YouTubeVideoPlayer.Twitch
                 : backup;
         }
 
+        /// <summary>A channel name as Twitch uses it: trimmed, without <c>#</c>, in lower case.</summary>
+        private static string ChannelName(string? name) => (name ?? string.Empty).Trim().TrimStart('#').ToLowerInvariant();
+
         /// <summary>Trims the names, fills sections that the file set to <c>null</c>, and keeps every number in its range.</summary>
         private void Normalize()
         {
@@ -346,7 +362,8 @@ namespace YouTubeVideoPlayer.Twitch
             ChatterAverage ??= new();
 
             Version = TwitchSettingsMigration.CurrentVersion;
-            Channel = (Channel ?? string.Empty).Trim().TrimStart('#').ToLowerInvariant();
+            VodChannel = ChannelName(VodChannel);
+            MainChannel = ChannelName(MainChannel);
             SignIn.BotLogin = (SignIn.BotLogin ?? string.Empty).Trim().ToLowerInvariant();
             SignIn.OAuthToken = (SignIn.OAuthToken ?? string.Empty).Trim();
             SignIn.ClientId = (SignIn.ClientId ?? string.Empty).Trim();
