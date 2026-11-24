@@ -117,7 +117,7 @@ namespace YouTubeVideoPlayer.Twitch
             if (_tokens == null)
             {
                 _started = true;
-                await ConnectAsync(_settings.BotUsername, _settings.OAuthToken);
+                await ConnectAsync(_settings.SignIn.BotLogin, _settings.SignIn.OAuthToken);
                 return;
             }
 

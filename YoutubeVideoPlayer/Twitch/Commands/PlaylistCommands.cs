@@ -65,6 +65,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public TimeSpan Cooldown { get; }
 
+        /// <summary>Shares one cooldown with the other commands that change what plays.</summary>
+        public string CooldownGroup => ChatCommandManager.PlaybackControlCooldownGroup;
+
         public async Task<string?> ExecuteAsync(ChatCommandContext context)
         {
             if (!_switch.HasOtherPlaylist)

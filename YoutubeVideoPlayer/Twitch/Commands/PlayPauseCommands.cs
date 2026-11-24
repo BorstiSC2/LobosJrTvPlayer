@@ -28,6 +28,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
 
         public TimeSpan Cooldown { get; }
 
+        /// <summary>Shares one cooldown with the other commands that change what plays.</summary>
+        public string CooldownGroup => ChatCommandManager.PlaybackControlCooldownGroup;
+
         public Task<string?> ExecuteAsync(ChatCommandContext context)
         {
             string reply;
@@ -78,6 +81,9 @@ namespace YouTubeVideoPlayer.Twitch.Commands
         public bool RequiresModerator => true;
 
         public TimeSpan Cooldown { get; }
+
+        /// <summary>Shares one cooldown with the other commands that change what plays.</summary>
+        public string CooldownGroup => ChatCommandManager.PlaybackControlCooldownGroup;
 
         public Task<string?> ExecuteAsync(ChatCommandContext context)
         {

@@ -364,6 +364,8 @@ FodyWeavers.xsd
 
 # Twitch bot credentials (see twitchsettings.example.json)
 twitchsettings.json
+# Backups of older layouts, kept when the app migrates the file (they hold the same credentials)
+twitchsettings.v*.json.bak
 
 # Twitch bot sign-in (access + refresh token), created at runtime
 twitchtoken.json
