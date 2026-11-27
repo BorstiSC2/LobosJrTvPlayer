@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
+using YouTubeVideoPlayer.Infrastructure;
 
 namespace YouTubeVideoPlayer.Twitch
 {
@@ -11,7 +12,7 @@ namespace YouTubeVideoPlayer.Twitch
     /// </summary>
     /// <remarks>
     /// A migration step only moves and renames what is there: values are copied unchanged (they are clamped when the
-    /// settings are loaded), and keys it does not know are kept at the end. Afterwards <see cref="AddMissing"/> adds every
+    /// settings are loaded), and keys it does not know are kept at the end. Afterwards <see cref="JsonSettings.AddMissing"/> adds every
     /// setting the file still lacks with its default. To change the layout again: raise <see cref="CurrentVersion"/>, add
     /// a step to <see cref="Steps"/> and a test, and add the new settings to <see cref="TwitchSettings"/> and the example
     /// file.
@@ -56,7 +57,7 @@ namespace YouTubeVideoPlayer.Twitch
         /// the end and runs 300 s, a <c>!voteskip</c> vote runs 120 s and needs 65 % of the recent chatters, and the vote
         /// after a won <c>!voteskip</c> runs 120 s. These are written as fixed values (not the current defaults), so the
         /// step stays the same when a default changes later. Settings that are new in version 2 and not set here
-        /// (<c>revote.durationSeconds</c>) are added with their defaults by <see cref="AddMissing"/>.
+        /// (<c>revote.durationSeconds</c>) are added with their defaults by <see cref="JsonSettings.AddMissing"/>.
         /// </summary>
         private static JObject FromVersion1(JObject old)
         {
@@ -169,46 +170,6 @@ namespace YouTubeVideoPlayer.Twitch
                 var property = result.Property(old.Name)!;
                 property.AddAfterSelf(new JProperty(to, property.Value.DeepClone()));
                 property.Remove();
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// The file with every setting of <paramref name="defaults"/> it does not have (or has as <c>null</c>) added with
-        /// its default. The result has the order of the defaults (that of the example file), sections included; the file's
-        /// values are kept as they are, keys are found whatever their case, and keys the defaults do not know (notes, typos)
-        /// are kept after the known ones.
-        /// </summary>
-        /// <param name="added">Receives the settings that were added, as <c>section.key</c>.</param>
-        public static JObject AddMissing(JObject settings, JObject defaults, ICollection<string>? added = null) =>
-            AddMissing(settings, defaults, added, prefix: string.Empty);
-
-        private static JObject AddMissing(JObject settings, JObject defaults, ICollection<string>? added, string prefix)
-        {
-            var result = new JObject();
-            foreach (var setting in defaults.Properties())
-            {
-                var own = settings.Property(setting.Name, StringComparison.OrdinalIgnoreCase)?.Value;
-                if (own is null or { Type: JTokenType.Null })
-                {
-                    result[setting.Name] = setting.Value.DeepClone();
-                    added?.Add(prefix + setting.Name);
-                }
-                else if (setting.Value is JObject section && own is JObject ownSection)
-                {
-                    result[setting.Name] = AddMissing(ownSection, section, added, prefix + setting.Name + ".");
-                }
-                else
-                {
-                    result[setting.Name] = own.DeepClone();
-                }
-            }
-
-            foreach (var property in settings.Properties())
-            {
-                if (defaults.Property(property.Name, StringComparison.OrdinalIgnoreCase) == null)
-                    result[property.Name] = property.Value.DeepClone();
             }
 
             return result;

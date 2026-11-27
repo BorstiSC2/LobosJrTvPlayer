@@ -369,3 +369,7 @@ twitchsettings.v*.json.bak
 
 # Twitch bot sign-in (access + refresh token), created at runtime
 twitchtoken.json
+
+# yt-dlp backend: the user downloads and updates these (see README, "YouTube backend")
+yt-dlp.exe
+deno.exe

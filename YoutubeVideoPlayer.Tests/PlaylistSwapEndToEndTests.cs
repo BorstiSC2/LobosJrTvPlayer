@@ -39,7 +39,7 @@ public class PlaylistSwapEndToEndTests
         player.IsPlaying.Returns(true);
         player.LengthMs.Returns((long)VideoLength.TotalMilliseconds);
         player.TimeMs.Returns(_ => (long)(time.GetUtcNow() - videoStart).TotalMilliseconds + ++reads);
-        player.When(p => p.Play(Arg.Any<string>(), Arg.Any<string?>())).Do(_ => videoStart = time.GetUtcNow());
+        player.When(p => p.Play(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<TimeSpan>(), Arg.Any<string?>())).Do(_ => videoStart = time.GetUtcNow());
         List<string> Played() => player.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IMediaPlayer.Play))
             .Select(c => ((string)c.GetArguments()[0]!).Replace(".video", ""))

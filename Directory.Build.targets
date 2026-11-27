@@ -1,0 +1,10 @@
+<Project>
+  <!-- WebView2 (the YouTube sign-in window) adds its WPF control to every .NET 5+ project that references it, the tests
+       included (through the app). This solution is WinForms only, and the WPF assembly's WindowsBase reference conflicts
+       with .NET's own (warning MSB3277), so it is left out. -->
+  <Target Name="RemoveWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>

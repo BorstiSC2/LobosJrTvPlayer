@@ -28,8 +28,9 @@ public class VideoPlayerFormTests
     {
         public TestableForm(PlaybackManager playback, PlaylistManager playlists, AppCoordinator coordinator,
             TwitchChatService? twitch, TwitchTokenManager? tokens, string botName, AutoVoteManager? autoVote = null,
-            IReadOnlyList<IVoteDisplay>? voteDisplays = null, NowPlayingSchedule? nowPlaying = null, AvatarSet? avatars = null)
-            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays, nowPlaying, avatars)
+            IReadOnlyList<IVoteDisplay>? voteDisplays = null, NowPlayingSchedule? nowPlaying = null, AvatarSet? avatars = null,
+            Func<string?, Form>? youtubeSignIn = null)
+            : base(playback, playlists, coordinator, null, twitch, tokens, botName, autoVote, voteDisplays, nowPlaying, avatars, youtubeSignIn)
         {
         }
 
@@ -40,7 +41,7 @@ public class VideoPlayerFormTests
     private sealed class App : IDisposable
     {
         public App(ITwitchClient? twitchClient = null, TwitchTokenManager? tokens = null, TwitchSettings? twitchSettings = null,
-            PlaylistSetup? playlists = null, AvatarSet? avatars = null)
+            PlaylistSetup? playlists = null, AvatarSet? avatars = null, Func<string?, Form>? youtubeSignIn = null)
         {
             Playlists = playlists ?? new PlaylistSetup().WithPlaylist(IdA, "A", selected: true).WithCache(IdA, "a1", "a2");
             Playlists.YouTube.ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -66,7 +67,7 @@ public class VideoPlayerFormTests
             NowPlaying = new NowPlayingSchedule(Playback, Time);
             Form = new TestableForm(
                 Playback, PlaylistManager, Coordinator, Twitch, tokens, "lobosbot", AutoVote,
-                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes }, NowPlaying, avatars);
+                Votes == null ? null : new IVoteDisplay[] { VoteSkip!, Votes }, NowPlaying, avatars, youtubeSignIn);
         }
 
         public PlaylistSetup Playlists { get; }
@@ -153,6 +154,70 @@ public class VideoPlayerFormTests
             Playlists.Dispose();
         }
     }
+
+    #region YouTube sign-in (prototype)
+
+    /// <summary>Stands in for the sign-in window: invisible, and records why it was opened.</summary>
+    private sealed class SignInWindows
+    {
+        public List<string?> Reasons { get; } = new();
+
+        public Form Create(string? reason)
+        {
+            Reasons.Add(reason);
+            return new Form
+            {
+                ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual,
+                Location = new Point(-32000, -32000),
+                Opacity = 0
+            };
+        }
+    }
+
+    [Fact]
+    public void WithoutTheAppsSignIn_ThereIsNoSignInButton() => UiContext.Run(() =>
+    {
+        using var app = new App();
+
+        Assert.DoesNotContain(app.Form.All<Button>(), b => b.Text == "YouTube sign-in");
+        app.Form.OfferYouTubeSignIn("YouTube asks."); // does nothing
+        return Task.CompletedTask;
+    }, sta: true);
+
+    [Fact]
+    public void TheSignInButton_OpensTheWindow_AndOnlyOneAtATime() => UiContext.Run(async () =>
+    {
+        var windows = new SignInWindows();
+        using var app = new App(youtubeSignIn: windows.Create);
+        await app.ShowAsync();
+
+        app.Form.Button("YouTube sign-in").PerformClick();
+        app.Form.Button("YouTube sign-in").PerformClick();
+
+        Assert.Equal(new string?[] { null }, windows.Reasons);
+        Assert.Single(app.Form.OwnedForms);
+    }, sta: true);
+
+    [Fact]
+    public void WhenYouTubeAsks_TheWindowOpensByItself_OnceTheWindowIsUp_AndOnlyOnce() => UiContext.Run(async () =>
+    {
+        var windows = new SignInWindows();
+        using var app = new App(youtubeSignIn: windows.Create);
+
+        app.Form.OfferYouTubeSignIn("YouTube asks this connection to sign in.");
+        Assert.Empty(windows.Reasons); // the player is not up yet
+        await app.ShowAsync();
+        await Async.WaitUntilAsync(() => windows.Reasons.Count == 1);
+
+        app.Form.OwnedForms.Single().Close();
+        app.Form.OfferYouTubeSignIn("YouTube asks this connection to sign in.");
+        await Async.SettleAsync();
+
+        Assert.Equal(new string?[] { "YouTube asks this connection to sign in." }, windows.Reasons);
+    }, sta: true);
+
+    #endregion
 
     #region Keyboard
 

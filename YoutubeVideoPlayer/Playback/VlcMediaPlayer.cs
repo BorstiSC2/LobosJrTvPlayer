@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LibVLCSharp.Shared;
@@ -44,12 +45,18 @@ namespace YouTubeVideoPlayer.Playback
         private volatile bool _disposed;
 
         public VlcMediaPlayer()
+            : this(Array.Empty<string>())
+        {
+        }
+
+        /// <param name="extraOptions">More LibVLC options; tests pass <c>--vout=dummy --aout=dummy</c> to play real streams without a window or sound.</param>
+        internal VlcMediaPlayer(params string[] extraOptions)
         {
             // - The title overlay would show the (very long) stream URL at the start of every video.
             // - After a slow start the first frames are "late". By default VLC drops late frames and skips
             //   frames when the decoder is behind; if that hits a keyframe, the frames that depend on it show
             //   as a flat grey picture with only motion outlines until the next keyframe. Decode everything.
-            _libVLC = new LibVLC("--no-video-title-show", "--no-drop-late-frames", "--no-skip-frames");
+            _libVLC = new LibVLC(new[] { "--no-video-title-show", "--no-drop-late-frames", "--no-skip-frames" }.Concat(extraOptions).ToArray());
             _libVLC.Log += OnLibVlcLog;
 
             // Without this the video window keeps the keyboard and mouse for itself: the form's shortcuts
@@ -97,12 +104,12 @@ namespace YouTubeVideoPlayer.Playback
 
         public event EventHandler? EncounteredError;
 
-        public void Play(string videoUrl, string? audioUrl, TimeSpan startAt = default)
+        public void Play(string videoUrl, string? audioUrl, TimeSpan startAt = default, string? userAgent = null)
         {
             if (_disposed)
                 return;
 
-            Enqueue(() => PlayCore(videoUrl, audioUrl, startAt));
+            Enqueue(() => PlayCore(videoUrl, audioUrl, startAt, userAgent));
         }
 
         /// <summary>Raises an end or error event once VLC's messages about it are in (see <see cref="EventDelay"/>).</summary>
@@ -165,7 +172,7 @@ namespace YouTubeVideoPlayer.Playback
                 return _lastCommand;
         }
 
-        private void PlayCore(string videoUrl, string? audioUrl, TimeSpan startAt)
+        private void PlayCore(string videoUrl, string? audioUrl, TimeSpan startAt, string? userAgent)
         {
             if (_disposed)
                 return;
@@ -187,6 +194,11 @@ namespace YouTubeVideoPlayer.Playback
                 // The stream URLs are long-lived HTTP downloads; reconnect after a dropped connection
                 // instead of ending the video early.
                 media.AddOption(":http-reconnect=true");
+
+                // yt-dlp's URLs can be tied to the User-Agent of the YouTube player client they came from. A media option
+                // applies to the input-slave too, so the audio is fetched with the same one.
+                if (!string.IsNullOrEmpty(userAgent))
+                    media.AddOption(":http-user-agent=" + userAgent);
 
                 // VLC seeks the audio input along with the video.
                 if (startAt > TimeSpan.Zero)

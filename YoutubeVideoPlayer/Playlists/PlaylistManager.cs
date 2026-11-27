@@ -967,6 +967,6 @@ namespace YouTubeVideoPlayer.Playlists
             string.IsNullOrWhiteSpace(url) ? null : PlaylistId.TryParse(url.Trim());
 
         private static string NormalizeUrl(PlaylistId playlistId) =>
-            $"https://www.youtube.com/playlist?list={playlistId.Value}";
+            YouTubeLinks.Playlist(playlistId.Value);
     }
 }

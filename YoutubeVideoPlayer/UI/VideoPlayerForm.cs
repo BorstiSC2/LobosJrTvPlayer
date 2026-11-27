@@ -71,12 +71,23 @@ namespace YouTubeVideoPlayer.UI
         private bool _updatingVolumeSlider;
         private bool _playlistDialogOpen;
 
+        // The YouTube sign-in window for yt-dlp (prototype): opened with the button, or once by itself when YouTube asks.
+        private readonly Func<string?, Form>? _createYouTubeSignIn;
+        private Form? _youtubeSignIn;
+        private bool _youtubeSignInOffered;
+        private string? _pendingYouTubeSignIn;
+        private bool _shown;
+
         /// <param name="videoOutput">The LibVLC player shown in the video area (<c>null</c> shows nothing, e.g. in tests).</param>
         /// <param name="twitchTokens">Set when the bot signs in through the app; enables the sign-in dialog.</param>
         /// <param name="twitchBotName">The expected bot login from the settings (may be empty).</param>
         /// <param name="autoVote">Set when the Twitch bot is on; enables the "Autovote" checkbox.</param>
         /// <param name="voteDisplays">The chat votes whose options the ticker at the bottom shows while they run.</param>
         /// <param name="nowPlaying">When the "now playing" card is due; without one the form makes its own.</param>
+        /// <param name="youtubeSignIn">
+        /// Creates the YouTube sign-in window (with why it opens by itself, or <c>null</c>); set while yt-dlp uses the app's
+        /// sign-in. Adds the "YouTube sign-in" button.
+        /// </param>
         public VideoPlayerForm(
             PlaybackManager playback,
             PlaylistManager playlists,
@@ -88,8 +99,10 @@ namespace YouTubeVideoPlayer.UI
             AutoVoteManager? autoVote = null,
             IReadOnlyList<IVoteDisplay>? voteDisplays = null,
             NowPlayingSchedule? nowPlaying = null,
-            AvatarSet? avatars = null)
+            AvatarSet? avatars = null,
+            Func<string?, Form>? youtubeSignIn = null)
         {
+            _createYouTubeSignIn = youtubeSignIn;
             _autoVote = autoVote;
             _avatars = avatars ?? AvatarSet.None;
             _ownsNowPlaying = nowPlaying == null;
@@ -213,6 +226,23 @@ namespace YouTubeVideoPlayer.UI
             });
             AddControlButton("Fullscreen", (_, __) => _windowModes!.ToggleFullscreen());
             AddControlButton("Borderless", (_, __) => _windowModes!.ToggleBorderless());
+            if (_createYouTubeSignIn != null)
+            {
+                var signIn = AddControlButton("YouTube sign-in", (_, __) => ShowYouTubeSignIn(reason: null));
+                signIn.Width = 120;
+                _toolTip.SetToolTip(signIn, "Signs yt-dlp in to YouTube with a Google account (a spare one is best),\n" +
+                                            "for when YouTube asks this connection to confirm it is not a bot.");
+            }
+
+            Shown += (_, __) =>
+            {
+                _shown = true;
+                if (_pendingYouTubeSignIn is { } reason)
+                {
+                    _pendingYouTubeSignIn = null;
+                    ShowYouTubeSignIn(reason);
+                }
+            };
 
             _muteButton = new Button
             {
@@ -714,6 +744,48 @@ namespace YouTubeVideoPlayer.UI
             var needsSignIn = _twitch.UsesAppSignIn
                 && _twitch.State is TwitchConnectionState.SignInRequired or TwitchConnectionState.LoginFailed;
             _twitchStatusLabel.ForeColor = needsSignIn ? Color.Firebrick : SystemColors.GrayText;
+        }
+
+        /// <summary>
+        /// YouTube asked yt-dlp for a sign-in: opens the sign-in window by itself, once per run (later requests are only
+        /// logged by yt-dlp; the button opens it any time). Before the window is shown, it opens once it is.
+        /// </summary>
+        public void OfferYouTubeSignIn(string reason)
+        {
+            if (_createYouTubeSignIn == null || _youtubeSignInOffered || IsDisposed)
+                return;
+
+            _youtubeSignInOffered = true;
+            Logger.Log($"Opening the YouTube sign-in window: {reason}");
+            if (_shown)
+                ShowYouTubeSignIn(reason);
+            else
+                _pendingYouTubeSignIn = reason;
+        }
+
+        /// <summary>
+        /// Opens the sign-in window, or brings it to the front if it is open. Not modal and the window mode stays: the
+        /// player goes on (a borderless capture source stays as it is), and an owned window stays above the player.
+        /// </summary>
+        private void ShowYouTubeSignIn(string? reason)
+        {
+            if (_createYouTubeSignIn == null || IsDisposed)
+                return;
+
+            if (_youtubeSignIn is { IsDisposed: false } open)
+            {
+                open.Activate();
+                return;
+            }
+
+            var window = _createYouTubeSignIn(reason);
+            window.FormClosed += (_, __) =>
+            {
+                if (ReferenceEquals(_youtubeSignIn, window))
+                    _youtubeSignIn = null;
+            };
+            _youtubeSignIn = window;
+            window.Show(this);
         }
 
         private void ShowTwitchLoginDialog()

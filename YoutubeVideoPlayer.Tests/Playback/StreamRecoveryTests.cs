@@ -55,7 +55,7 @@ public class StreamRecoveryTests
         setup.Player.EndReached += Raise.Event();
         await Async.SettleAsync();
 
-        setup.Player.Received(1).Play("v1.video", "v1.audio", Arg.Is<TimeSpan>(t => t > TimeSpan.Zero && t <= Resumed(Minute + 1)));
+        setup.Player.Received(1).Play("v1.video", "v1.audio", Arg.Is<TimeSpan>(t => t > TimeSpan.Zero && t <= Resumed(Minute + 1)), Arg.Any<string?>());
         Assert.DoesNotContain("v2.video", setup.PlayedVideos());
         Assert.Empty(finished); // it did not play to its end
     });
@@ -356,7 +356,7 @@ public class ReloadTests
         setup.Player.EndReached += Raise.Event();
         await Async.WaitUntilAsync(() => setup.Manager.IsWaitingForHold);
         Assert.Equal(ReloadResult.NothingPlaying, setup.Manager.Reload());
-        setup.Player.DidNotReceive().Play(Arg.Any<string>(), Arg.Any<string?>(), Arg.Is<TimeSpan>(t => t > TimeSpan.Zero));
+        setup.Player.DidNotReceive().Play(Arg.Any<string>(), Arg.Any<string?>(), Arg.Is<TimeSpan>(t => t > TimeSpan.Zero), Arg.Any<string?>());
     });
 
     [Fact]

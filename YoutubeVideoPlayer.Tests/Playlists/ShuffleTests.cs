@@ -347,7 +347,7 @@ public class ShuffleTests
         time.Advance(PlaybackManager.DelayBeforeNextVideo);
         await skip;
 
-        player.Received(1).Play("e5.video", Arg.Any<string?>()); // continues after e4, not after e1
+        player.Received(1).Play("e5.video", Arg.Any<string?>(), Arg.Any<TimeSpan>(), Arg.Any<string?>()); // continues after e4, not after e1
     });
 
     private static (SkipVoteManager Votes, List<string> Sent) VoteOn(PlaylistSetup setup, PlaylistManager playlists, string? current, FakeTimeProvider time)

@@ -1,6 +1,6 @@
 # YouTube Video Player
 
-A lightweight Windows Forms application for playing YouTube videos from your playlists (in random or playlist order) using **LibVLCSharp** and **YoutubeExplode**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and its position and mods skip videos.
+A lightweight Windows Forms application for playing YouTube videos from your playlists (in random or playlist order) using **LibVLCSharp** and **YoutubeExplode** or **yt-dlp**. The application streams videos directly from YouTube, supports fullscreen and borderless playback, audio controls, automatically skips unavailable or broken videos, and can run a **Twitch chat bot** that lets viewers query the current video and its position and mods skip videos.
 
 ---
 
@@ -12,6 +12,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 - Playlists that play in order continue where they left off – after another playlist and after a restart
 - Cached video lists per playlist – instant switching, YouTube is only contacted when needed
 - Streams directly from YouTube
+- Two ways to look videos up: the built-in YoutubeExplode or yt-dlp.exe, each falling back to the other when a lookup fails (see *YouTube backend*)
 - Automatic selection of the best video and audio stream (up to 1440p, no HDR, easy-to-decode codecs first; for videos with several audio languages the English track is played, not an automatically dubbed translation)
 - No gap between two videos: the next one is chosen and looked up while the current one plays
 - Automatic fallback to muxed streams when required
@@ -31,6 +32,7 @@ A lightweight Windows Forms application for playing YouTube videos from your pla
 
 - .NET 10 SDK (Windows)
 - Internet connection
+- Optional: [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases) and [Deno](https://github.com/denoland/deno/releases), for the yt-dlp backend (see *YouTube backend*)
 
 NuGet packages:
 
@@ -68,6 +70,7 @@ All files live next to the executable.
 |------|---------|
 | `playlists.json` | The playlists (title, link, order), the selected one and the automatic swap (on/off, interval, last change). Created from `playlists.default.json` on first start |
 | `PlaylistCache/<playlist id>.json` | The cached video IDs of one playlist |
+| `appsettings.json` | Which backend looks videos up on YouTube (see *YouTube backend*). Created with the defaults on first start |
 
 Example `playlists.json`:
 
@@ -338,6 +341,87 @@ If a video cannot be played, the next one is attempted automatically, without an
 
 ---
 
+## YouTube backend: YoutubeExplode or yt-dlp
+
+Videos, their streams and playlists are looked up on YouTube by one of two backends:
+
+- **YoutubeExplode** (default): a library inside the app. Nothing to install, but when YouTube changes something it can break (e.g. `Failed to extract the video author.` while loading a playlist) until the app is built with a fixed version.
+- **yt-dlp**: the program `yt-dlp.exe`, run for every lookup. It is usually fixed within days of a YouTube change, and you update it yourself without rebuilding the app. A lookup takes about 3.5 seconds, and YouTube only serves the streams a few seconds after it (about 6 seconds; the app waits for that before it plays them). This does not show between two videos, because the next video is looked up while the current one plays; a vote winner, a resume or a playlist switch starts about 10 seconds after the request instead of about 3. Downloading the video list of a playlist with 1,250 videos takes about 9 seconds.
+
+With **fallback** on (the default), a lookup that fails with one backend is tried once more with the other: a video, a playlist, or a playlist that comes back without any video. A video lookup gives the first backend 25 seconds before the second is asked. With YoutubeExplode chosen, putting `yt-dlp.exe` next to the app is enough to give it a fallback.
+
+### Settings (`appsettings.json`)
+
+The file is next to the executable and is created with every setting on the first start. Changes take effect on the **next start**.
+
+```json
+{
+  "version": 1,
+  "youtube": {
+    "backend": "youtubeExplode",
+    "fallback": true,
+    "ytDlp": { "path": "yt-dlp.exe", "extraArguments": [], "checkForUpdates": true }
+  }
+}
+```
+
+| Setting | Meaning |
+|---------|---------|
+| `youtube.backend` | `youtubeExplode` or `ytDlp` (any case). Anything else means YoutubeExplode |
+| `youtube.fallback` | Try a failed lookup once more with the other backend (if it is available) |
+| `youtube.ytDlp.path` | Where `yt-dlp.exe` is: absolute, or relative to the app folder; a bare file name is also looked for on `PATH` |
+| `youtube.ytDlp.extraArguments` | Extra arguments for every yt-dlp run, one per entry, e.g. `["--cookies-from-browser", "firefox"]` or `["--js-runtimes", "node"]` |
+| `youtube.ytDlp.checkForUpdates` | Say at startup when a newer yt-dlp has been released (see below) |
+
+If `ytDlp` is chosen but `yt-dlp.exe` is not found, a message box says so at startup and YoutubeExplode is used.
+
+### Setting up yt-dlp
+
+1. Download `yt-dlp.exe` from the [yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases) and put it next to `YouTubeVideoPlayer.exe`.
+2. Since late 2025 yt-dlp needs a JavaScript runtime for YouTube. Download Deno (`deno-x86_64-pc-windows-msvc.zip` from the [Deno releases](https://github.com/denoland/deno/releases)) and put `deno.exe` next to `yt-dlp.exe` (or anywhere on `PATH`). Without it yt-dlp finds fewer streams, and its warning `No supported JavaScript runtime could be found` appears once in `errorlog.txt`.
+3. Set `"backend": "ytDlp"` in `appsettings.json` and restart the app.
+
+### Updating yt-dlp
+
+The app never updates yt-dlp itself. When yt-dlp is in use (chosen, or as the fallback) and `checkForUpdates` is on, the app asks GitHub at startup for the latest yt-dlp release. If it is newer than the installed one, a message box says so once the window is open; **OK** just closes it, and the app keeps using the installed version. To update, run this in the app folder (the folder must be writable), or download the new `yt-dlp.exe`:
+
+```powershell
+.\yt-dlp.exe -U
+```
+
+### "Sign in to confirm you're not a bot"
+
+YouTube sometimes refuses to answer a connection it takes for a bot – often a VPN, a shared or server address, or one that made many requests in a short time. Then **every** lookup fails, with both backends: yt-dlp says `Sign in to confirm you’re not a bot`, YoutubeExplode only `Video '…' is not available` (it reports YouTube's refusal like that), and the app keeps trying the next video, so nothing plays. Waiting sometimes helps, and turning off a VPN often does. The reliable fix is to let yt-dlp use the cookies of a browser that is signed in to YouTube, in `appsettings.json`:
+
+```json
+"ytDlp": { "path": "yt-dlp.exe", "extraArguments": ["--cookies-from-browser", "firefox"], "checkForUpdates": true }
+```
+
+- **Firefox** works best: on Windows, yt-dlp often cannot read the cookies of Chrome and Edge.
+- Or export a `cookies.txt` (Netscape format) with a browser extension, put it next to `yt-dlp.exe` and use `["--cookies", "cookies.txt"]`. yt-dlp's wiki recommends exporting from a private window and closing it afterwards, so YouTube does not replace the cookies.
+- Use a **second YouTube account**, not your main one: YouTube can restrict accounts it sees used by tools like this.
+- Set `"backend": "ytDlp"`: only yt-dlp uses the cookies; YoutubeExplode keeps failing while the connection is refused.
+
+### Signing in from the app (prototype)
+
+The app can sign in to YouTube in a window of its own and hand the sign-in to yt-dlp. While yt-dlp is in use, the control bar has a **YouTube sign-in** button that opens it, and it opens by itself the first time YouTube asks a lookup for a sign-in (the bot check above). The player keeps running meanwhile. Without the player (no Twitch bot either), it opens with:
+
+```powershell
+.\YouTubeVideoPlayer.exe --youtube-signin
+```
+
+Sign in with the Google account yt-dlp should use – a spare one is best. When you are back on YouTube, the window says **Signed in** and saves the sign-in to `%LOCALAPPDATA%\YouTubeVideoPlayer\youtube-cookies.txt`; yt-dlp uses it from its next lookup on, also in a player that is already running. **Test with yt-dlp** looks up a video with it, **Sign out** deletes it.
+
+- The window is a plain Microsoft Edge WebView2. Google may refuse to sign in there (`This browser or app may not be secure`); then use the Firefox cookies described above instead. Finding that out is what the prototype is for.
+- The file signs in to that Google account. It is kept in your Windows profile, not in the app folder, so it is not copied along with the app.
+- Cookies of your own in `ytDlp.extraArguments` (`--cookies`, `--cookies-from-browser`) win over the saved sign-in.
+
+### In the log
+
+`errorlog.txt` names the backend at startup (`YouTube backend: yt-dlp (C:\...\yt-dlp.exe), falling back to YoutubeExplode.`), the backend that found the streams of every video (`Streams for '<id>' (yt-dlp): ...`), and every fallback (`YoutubeExplode failed for playlist '<id>' (...); trying yt-dlp.`).
+
+---
+
 ## User Interface
 
 - **Video area** – double-click toggles fullscreen.
@@ -376,11 +460,11 @@ YoutubeVideoPlayer/
 ├── Program.cs              Composition root: creates and wires the managers
 ├── AppCoordinator.cs       Startup sequence; starts/switches playback when the playlist pool changes
 ├── Playback/               PlaybackManager (buffering timeout, fail-safe), NextVideoPrefetcher (no gap between videos), VlcMediaPlayer (LibVLC)
-├── YouTube/                YouTubeService (YoutubeExplode), stream selection (video quality, audio language)
+├── YouTube/                YoutubeExplodeService, YtDlp/ (yt-dlp.exe backend, update check), the fallback between them, stream selection
 ├── Playlists/              PlaylistManager, playlists.json store, per-playlist cache, PlaylistSwapScheduler (automatic swap)
 ├── Twitch/                 TwitchChatService, ChatCommandManager, Commands/, Voting/, Auth/ (sign-in)
 ├── UI/                     Main form (view only), window modes, dialogs
-└── Infrastructure/         Logger, JSON file helpers, UI-thread timer
+└── Infrastructure/         Logger, JSON file helpers, appsettings.json, UI-thread timer
 
 YoutubeVideoPlayer.Tests/   xUnit + NSubstitute tests
 ```
@@ -393,10 +477,10 @@ YoutubeVideoPlayer.Tests/   xUnit + NSubstitute tests
 dotnet test YoutubeVideoPlayer.Tests/YoutubeVideoPlayer.Tests.csproj
 ```
 
-The tests run offline. YouTube, VLC, Twitch and the clock are replaced by substitutes, so even timeouts of minutes or hours run instantly. A few UI tests briefly open transparent, off-screen windows. Tests against the real YouTube are skipped by default; to run them, set `YTP_INTEGRATION_TESTS=1` (PowerShell: `$env:YTP_INTEGRATION_TESTS = "1"`).
+The tests run offline. YouTube, VLC, Twitch and the clock are replaced by substitutes, so even timeouts of minutes or hours run instantly. A few UI tests briefly open transparent, off-screen windows. Tests against the real YouTube are skipped by default; to run them, set `YTP_INTEGRATION_TESTS=1` (PowerShell: `$env:YTP_INTEGRATION_TESTS = "1"`). The yt-dlp ones also need `yt-dlp.exe` on `PATH` or in `YTP_YTDLP_PATH`.
 
 ---
 
 ## Notes
 
-The application does not use the official YouTube API. Streams and playlists are resolved dynamically through YoutubeExplode and played using LibVLC.
+The application does not use the official YouTube API. Streams and playlists are resolved dynamically through YoutubeExplode or yt-dlp and played using LibVLC.

@@ -1,4 +1,5 @@
 using Newtonsoft.Json.Linq;
+using YouTubeVideoPlayer.Infrastructure;
 using YouTubeVideoPlayer.Twitch;
 
 namespace YouTubeVideoPlayer.Tests.Twitch;
@@ -183,7 +184,7 @@ public class TwitchSettingsMigrationTests
     {
         var added = new List<string>();
 
-        var result = TwitchSettingsMigration.AddMissing(
+        var result = JsonSettings.AddMissing(
             JObject.Parse("""{ "version": 2, "signIn": { "botLogin": "bot" }, "autoVote": { "leadTimeSeconds": 600 } }"""),
             Defaults, added);
 
@@ -201,7 +202,7 @@ public class TwitchSettingsMigrationTests
     [Fact]
     public void AddMissing_PutsTheSettingsInTheOrderOfTheDefaults_AndKeepsUnknownKeysAtTheEnd()
     {
-        var result = TwitchSettingsMigration.AddMissing(
+        var result = JsonSettings.AddMissing(
             JObject.Parse("""{ "_note": "mine", "autoVote": { "durationSeconds": 60, "x": 1 }, "Channel": "chan", "version": 2 }"""),
             Defaults);
 
@@ -214,7 +215,7 @@ public class TwitchSettingsMigrationTests
     [Fact]
     public void AddMissing_TreatsNullLikeMissing_AndKeepsEveryOtherValueAsItIs()
     {
-        var result = TwitchSettingsMigration.AddMissing(
+        var result = JsonSettings.AddMissing(
             JObject.Parse("""{ "version": 2, "channel": null, "signIn": null, "autoVote": { "leadTimeSeconds": 99999 } }"""),
             Defaults);
 
@@ -229,7 +230,7 @@ public class TwitchSettingsMigrationTests
         var complete = (JObject)Defaults.DeepClone();
         var added = new List<string>();
 
-        var result = TwitchSettingsMigration.AddMissing(complete, Defaults, added);
+        var result = JsonSettings.AddMissing(complete, Defaults, added);
 
         Assert.True(JToken.DeepEquals(complete, result));
         Assert.Empty(added);

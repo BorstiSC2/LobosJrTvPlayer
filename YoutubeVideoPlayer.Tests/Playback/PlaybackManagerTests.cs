@@ -50,6 +50,18 @@ public class PlaybackManagerTests
     });
 
     [Fact]
+    public void PlayNext_PassesTheUserAgentTheBackendNamed_ToThePlayer() => UiContext.Run(async () =>
+    {
+        using var setup = new PlaybackSetup().Queue("v1");
+        setup.YouTube.ResolveAsync("v1", Arg.Any<CancellationToken>())
+            .Returns(PlaybackSetup.Resolved("v1") with { UserAgent = "Mozilla/5.0 (yt-dlp)" });
+
+        await setup.RunAsync(() => setup.Manager.PlayNextAsync());
+
+        setup.Player.Received(1).Play("v1.video", "v1.audio", TimeSpan.Zero, "Mozilla/5.0 (yt-dlp)");
+    });
+
+    [Fact]
     public void PlayNext_SkipsVideosThatCannotBeResolved() => UiContext.Run(async () =>
     {
         using var setup = new PlaybackSetup().Queue("broken", "v2");
@@ -68,7 +80,7 @@ public class PlaybackManagerTests
     public void PlayNext_SkipsVideosThePlayerRejects() => UiContext.Run(async () =>
     {
         using var setup = new PlaybackSetup().Queue("v1", "v2");
-        setup.Player.When(p => p.Play("v1.video", Arg.Any<string?>())).Throw(new InvalidOperationException("bad media"));
+        setup.Player.When(p => p.Play("v1.video", Arg.Any<string?>(), Arg.Any<TimeSpan>(), Arg.Any<string?>())).Throw(new InvalidOperationException("bad media"));
         var announced = new List<string>();
         setup.Manager.NowPlayingChanged += (_, n) => announced.Add(n.VideoId);
 
@@ -313,7 +325,7 @@ public class PlaybackManagerTests
 
         setup.Player.EndReached += Raise.Event(); // before the preparation had a chance to start
         await Async.SettleAsync();
-        setup.Player.DidNotReceive().Play("v2.video", Arg.Any<string?>()); // still waiting for the pause
+        setup.Player.DidNotReceive().Play("v2.video", Arg.Any<string?>(), Arg.Any<TimeSpan>(), Arg.Any<string?>()); // still waiting for the pause
 
         await setup.AdvanceAsync(PlaybackManager.DelayBeforeNextVideo);
 

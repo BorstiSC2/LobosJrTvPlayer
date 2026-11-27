@@ -222,7 +222,7 @@ namespace YouTubeVideoPlayer.Twitch
         /// Loads the settings; returns <c>null</c> if the file is missing or cannot be read. A file of an older layout is
         /// migrated and written back (the original is kept as <c>twitchsettings.v&lt;version&gt;.json.bak</c>). Settings the
         /// file does not have (new ones, or ones the user removed) are added with their defaults
-        /// (<see cref="TwitchSettingsMigration.AddMissing"/>) and the file is written back too, so it always shows every
+        /// (<see cref="JsonSettings.AddMissing"/>) and the file is written back too, so it always shows every
         /// setting. If writing fails, the settings are used anyway and it is tried again on the next start. A file of a
         /// newer version (a later app) is never written.
         /// </summary>
@@ -257,7 +257,7 @@ namespace YouTubeVideoPlayer.Twitch
                         migrated = TwitchSettingsMigration.RenamePreReleaseKeys(migrated);
 
                     var added = new List<string>();
-                    migrated = TwitchSettingsMigration.AddMissing(migrated, DefaultJson(), added);
+                    migrated = JsonSettings.AddMissing(migrated, DefaultJson(), added);
                     if (fromVersion < TwitchSettingsMigration.CurrentVersion)
                         SaveMigrated(path, migrated, fromVersion, added);
                     else if (!JToken.DeepEquals(migrated, json))
@@ -277,7 +277,7 @@ namespace YouTubeVideoPlayer.Twitch
 
         /// <summary>
         /// Every setting with its default, in the order of the file (the example file has the same): what
-        /// <see cref="TwitchSettingsMigration.AddMissing"/> fills a file up from.
+        /// <see cref="JsonSettings.AddMissing"/> fills a file up from.
         /// </summary>
         internal static JObject DefaultJson() =>
             JObject.FromObject(new TwitchSettings(), JsonSerializer.Create(new JsonSerializerSettings

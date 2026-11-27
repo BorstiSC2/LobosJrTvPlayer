@@ -143,7 +143,7 @@ public class AudioTrackSelectionTests
             AudioTrack("https://stream.example/en", 130_000, "en-US", "English (US) original", true)
         });
 
-        var selected = YouTubeService.SelectStreams(manifest, "BepBWodKptk");
+        var selected = YoutubeExplodeService.SelectStreams(manifest, "BepBWodKptk");
 
         Assert.Equal("https://stream.example/video", selected.VideoUrl);
         Assert.Equal("https://stream.example/en", selected.AudioUrl);
@@ -161,7 +161,7 @@ public class AudioTrackSelectionTests
             new AudioOnlyStreamInfo("https://stream.example/high", new Container("webm"), new FileSize(1), new Bitrate(160_000), "opus", null, null)
         });
 
-        Assert.Equal("https://stream.example/high", YouTubeService.SelectStreams(manifest, "v").AudioUrl);
+        Assert.Equal("https://stream.example/high", YoutubeExplodeService.SelectStreams(manifest, "v").AudioUrl);
     }
 
     #endregion

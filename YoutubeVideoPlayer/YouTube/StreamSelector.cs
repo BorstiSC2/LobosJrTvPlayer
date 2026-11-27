@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using YouTubeVideoPlayer.Infrastructure;
 
 namespace YouTubeVideoPlayer.YouTube
 {
@@ -72,6 +73,28 @@ namespace YouTubeVideoPlayer.YouTube
             var muxed = HighestBitrate(list.Where(s => s.Kind == StreamKind.Muxed))
                 ?? throw new InvalidOperationException("No muxed stream found");
             return new SelectedStreams(muxed.Url, null);
+        }
+
+        /// <summary><see cref="Select"/>, and the choice written to the log (<see cref="LogSelection"/>).</summary>
+        /// <param name="source">The backend that offered the streams, for the log.</param>
+        public static SelectedStreams SelectAndLog(IReadOnlyCollection<StreamCandidate> streams, string videoIdOrUrl, string source)
+        {
+            var selected = Select(streams);
+            LogSelection(streams, selected, videoIdOrUrl, source);
+            return selected;
+        }
+
+        /// <summary>
+        /// Writes codec, resolution and audio track of the chosen streams to the log, e.g. <c>Streams for 'id' (yt-dlp):
+        /// video avc1.640028 1080p 4500 kbit/s, audio opus 130 kbit/s [en-US, original]</c>. Visual glitches are tied to
+        /// the codec and resolution, so this keeps a record of what was played.
+        /// </summary>
+        public static void LogSelection(IReadOnlyCollection<StreamCandidate> streams, SelectedStreams selected, string videoIdOrUrl, string source)
+        {
+            var video = streams.FirstOrDefault(c => c.Url == selected.VideoUrl);
+            var audio = selected.AudioUrl == null ? null : streams.FirstOrDefault(c => c.Url == selected.AudioUrl);
+            Logger.Log($"Streams for '{videoIdOrUrl}' ({source}): video {video?.Describe() ?? "?"}"
+                + (audio != null ? $", audio {audio.Describe()}" : ", no separate audio"));
         }
 
         /// <summary>

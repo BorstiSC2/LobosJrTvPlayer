@@ -5,7 +5,7 @@ using YouTubeVideoPlayer.YouTube;
 
 namespace YouTubeVideoPlayer.Tests.YouTube;
 
-public class YouTubeServiceTests
+public class YoutubeExplodeServiceTests
 {
     // A long-standing public video and the uploads playlist of its channel (used by the integration tests).
     private const string VideoId = "0_twHqFV6Lo";
@@ -14,9 +14,15 @@ public class YouTubeServiceTests
     [InlineData("dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ")]
     [InlineData("https://youtu.be/dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ")]
     [InlineData("HTTPS://www.youtube.com/watch?v=x", "HTTPS://www.youtube.com/watch?v=x")]
-    public void ToUrl_TurnsIdsIntoWatchLinks_AndKeepsUrls(string input, string expected)
+    public void VideoLink_TurnsIdsIntoWatchLinks_AndKeepsUrls(string input, string expected)
     {
-        Assert.Equal(expected, YouTubeService.ToUrl(input));
+        Assert.Equal(expected, YouTubeLinks.Video(input));
+    }
+
+    [Fact]
+    public void PlaylistLink_IsThePlaylistPage()
+    {
+        Assert.Equal("https://www.youtube.com/playlist?list=PL123", YouTubeLinks.Playlist("PL123"));
     }
 
     /// <summary>Answers every request with an error, but only once two requests are running at the same time (or after 3 s).</summary>
@@ -58,7 +64,7 @@ public class YouTubeServiceTests
         // Two lookups of a second or more each: one after the other they double the black screen between two videos.
         var handler = new OverlapHandler();
         using var client = new YoutubeClient(new HttpClient(handler));
-        var service = new YouTubeService(client);
+        var service = new YoutubeExplodeService(client);
 
         await Assert.ThrowsAnyAsync<Exception>(() => service.ResolveAsync(VideoId, CancellationToken.None)); // the fake YouTube only fails
 
@@ -69,7 +75,7 @@ public class YouTubeServiceTests
     public async Task GetVideo_ReturnsTitleAndDuration()
     {
         using var client = new YoutubeClient();
-        var service = new YouTubeService(client);
+        var service = new YoutubeExplodeService(client);
 
         var video = await service.GetVideoAsync(VideoId, CancellationToken.None);
 
@@ -81,7 +87,7 @@ public class YouTubeServiceTests
     public async Task Resolve_ReturnsPlayableStreams()
     {
         using var client = new YoutubeClient();
-        var service = new YouTubeService(client);
+        var service = new YoutubeExplodeService(client);
 
         var video = await service.ResolveAsync(VideoId, CancellationToken.None);
 
@@ -93,7 +99,7 @@ public class YouTubeServiceTests
     public async Task Playlist_TitleAndVideoIds()
     {
         using var client = new YoutubeClient();
-        var service = new YouTubeService(client);
+        var service = new YoutubeExplodeService(client);
         var channelId = (await client.Videos.GetAsync(VideoId)).Author.ChannelId.Value;
         var uploadsPlaylist = "UU" + channelId[2..];
 

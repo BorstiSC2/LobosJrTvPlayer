@@ -30,7 +30,8 @@ namespace YouTubeVideoPlayer.Playback
         /// </summary>
         /// <param name="audioUrl">A separate audio stream played along with the video, or <c>null</c>.</param>
         /// <param name="startAt">Where to start in the video (used to resume a video whose stream broke off).</param>
-        void Play(string videoUrl, string? audioUrl, TimeSpan startAt = default);
+        /// <param name="userAgent">The User-Agent to fetch both streams with; <c>null</c> for the player's own.</param>
+        void Play(string videoUrl, string? audioUrl, TimeSpan startAt = default, string? userAgent = null);
 
         /// <summary>
         /// The player's own most recent warnings and errors (oldest first), e.g. why a stream connection failed, so

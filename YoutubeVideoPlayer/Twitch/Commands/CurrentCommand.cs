@@ -38,7 +38,7 @@ namespace YouTubeVideoPlayer.Twitch.Commands
                 return Task.FromResult<string?>("Nothing is playing right now.");
 
             var title = string.IsNullOrWhiteSpace(current.Title) ? "The current video" : $"\"{current.Title}\"";
-            var url = YouTubeService.ToUrl(current.VideoId);
+            var url = YouTubeLinks.Video(current.VideoId);
             _showOnStream?.Invoke();
 
             return Task.FromResult<string?>($"Now playing: {title} – {DescribePosition()} – {url}");

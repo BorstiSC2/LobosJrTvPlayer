@@ -10,25 +10,25 @@ using YouTubeVideoPlayer.Infrastructure;
 
 namespace YouTubeVideoPlayer.YouTube
 {
-    /// <summary><see cref="IYouTubeService"/> on top of YoutubeExplode (no official API key needed).</summary>
-    public sealed class YouTubeService : IYouTubeService
+    /// <summary><see cref="IYouTubeService"/> on top of the YoutubeExplode library (no official API key needed).</summary>
+    public sealed class YoutubeExplodeService : IYouTubeService
     {
         private readonly YoutubeClient _yt;
 
-        public YouTubeService(YoutubeClient youtubeClient)
+        public YoutubeExplodeService(YoutubeClient youtubeClient)
         {
             _yt = youtubeClient;
         }
 
         public async Task<YouTubeVideoDetails> GetVideoAsync(string videoIdOrUrl, CancellationToken cancellationToken)
         {
-            var video = await _yt.Videos.GetAsync(ToUrl(videoIdOrUrl), cancellationToken);
+            var video = await _yt.Videos.GetAsync(YouTubeLinks.Video(videoIdOrUrl), cancellationToken);
             return new YouTubeVideoDetails(video.Title ?? string.Empty, video.Duration);
         }
 
         public async Task<ResolvedVideo> ResolveAsync(string videoIdOrUrl, CancellationToken cancellationToken)
         {
-            var url = ToUrl(videoIdOrUrl);
+            var url = YouTubeLinks.Video(videoIdOrUrl);
 
             // Video metadata (to show the title) and the stream manifest do not depend on each other, and each is a
             // round trip to YouTube of a second or more, so both are asked for at the same time.
@@ -94,21 +94,7 @@ namespace YouTubeVideoPlayer.YouTube
                 .Select(s => new StreamCandidate(
                     StreamKind.Muxed, s.Url, s.Bitrate.BitsPerSecond, s.VideoCodec, s.VideoQuality.MaxHeight)));
 
-            var selected = StreamSelector.Select(candidates);
-
-            // Visual glitches are tied to the codec and resolution, so keep a record of what was played.
-            var video = candidates.FirstOrDefault(c => c.Url == selected.VideoUrl);
-            var audio = candidates.FirstOrDefault(c => c.Url == selected.AudioUrl);
-            Logger.Log($"Streams for '{videoIdOrUrl}': video {video?.Describe() ?? "?"}"
-                + (audio != null ? $", audio {audio.Describe()}" : ", no separate audio"));
-
-            return selected;
+            return StreamSelector.SelectAndLog(candidates, videoIdOrUrl, YouTubeBackend.YoutubeExplode.DisplayName());
         }
-
-        /// <summary>Accepts either a raw video ID or a full URL.</summary>
-        public static string ToUrl(string videoIdOrUrl) =>
-            videoIdOrUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? videoIdOrUrl
-                : $"https://www.youtube.com/watch?v={videoIdOrUrl}";
     }
 }

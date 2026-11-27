@@ -755,7 +755,7 @@ namespace YouTubeVideoPlayer.Playback
             SetResuming(false);
             SetState(standby: false, paused: false);
 
-            _player.Play(video.VideoUrl, video.AudioUrl);
+            _player.Play(video.VideoUrl, video.AudioUrl, userAgent: video.UserAgent);
 
             _currentIsRequested = requested;
             Current = new NowPlaying(idOrUrl, video.Title, video.Duration);
@@ -924,7 +924,7 @@ namespace YouTubeVideoPlayer.Playback
                 _failSafeTriggered = false;
                 _failSafePlaybackTime = long.MinValue;
                 SetState(standby: false, paused: false); // a reloaded video plays, also if it was paused
-                _player.Play(resolved.VideoUrl, resolved.AudioUrl, startAt);
+                _player.Play(resolved.VideoUrl, resolved.AudioUrl, startAt, resolved.UserAgent);
 
                 // The label stays until the video really plays on there (VLC reports 0 while it seeks).
                 _resumeCheckPositionMs = -1;

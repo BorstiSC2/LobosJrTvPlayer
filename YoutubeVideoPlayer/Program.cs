@@ -1,9 +1,10 @@
 using System;
+using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using LibVLCSharp.Shared;
-using YoutubeExplode;
 using YouTubeVideoPlayer.Infrastructure;
 using YouTubeVideoPlayer.Playback;
 using YouTubeVideoPlayer.Playlists;
@@ -13,6 +14,7 @@ using YouTubeVideoPlayer.Twitch.Commands;
 using YouTubeVideoPlayer.Twitch.Voting;
 using YouTubeVideoPlayer.UI;
 using YouTubeVideoPlayer.YouTube;
+using YouTubeVideoPlayer.YouTube.YtDlp;
 
 namespace YouTubeVideoPlayer
 {
@@ -20,7 +22,7 @@ namespace YouTubeVideoPlayer
     internal static class Program
     {
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             // Initialize LibVLC native libraries
             Core.Initialize();
@@ -32,10 +34,36 @@ namespace YouTubeVideoPlayer
             // The managers capture the UI context when they are created, so install it before creating them.
             SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
 
+            // Prototype: "YouTubeVideoPlayer.exe --youtube-signin" opens only the YouTube sign-in window (no player, no
+            // Twitch bot), and leaves the log of a player that may be running as it is.
+            if (args.Any(a => a.Equals("--youtube-signin", StringComparison.OrdinalIgnoreCase)))
+            {
+                var settings = AppSettings.Load();
+                var ytDlpPath = YtDlpLocator.Find(settings.YouTube.YtDlp.Path, AppDomain.CurrentDomain.BaseDirectory);
+                Logger.Log("YouTube sign-in window opened (--youtube-signin).");
+                Application.Run(new YouTubeSignInDialog(ytDlpPath));
+                return;
+            }
+
             Logger.Clear();
 
-            using var youtubeClient = new YoutubeClient();
-            var youtube = new YouTubeService(youtubeClient);
+            // YoutubeExplode or yt-dlp, with the other as fallback, as appsettings.json says.
+            var appSettings = AppSettings.Load();
+            using var youtubeBackends = YouTubeBackends.Create(appSettings.YouTube);
+            Logger.Log($"YouTube backend: {youtubeBackends.Description}.");
+            if (youtubeBackends.Problem != null)
+            {
+                Logger.Log(youtubeBackends.Problem);
+                MessageBox.Show(youtubeBackends.Problem, "yt-dlp not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
+            // Only tells the user when a newer yt-dlp has been released; the app never updates it.
+            using var updateHttp = new HttpClient();
+            var ytDlpUpdateNotice = youtubeBackends.YtDlpRunner is { } ytDlpRunner && appSettings.YouTube.YtDlp.CheckForUpdates
+                ? Task.Run(() => YtDlpUpdateCheck.CheckAsync(ytDlpRunner, updateHttp, TimeProvider.System, CancellationToken.None))
+                : null;
+
+            var youtube = youtubeBackends.Service;
             var playlists = new PlaylistManager(youtube, new PlaylistStore(), new PlaylistCache());
 
             VlcMediaPlayer player;
@@ -160,7 +188,7 @@ namespace YouTubeVideoPlayer
 
             try
             {
-                Application.Run(new VideoPlayerForm(
+                var form = new VideoPlayerForm(
                     playback,
                     playlists,
                     coordinator,
@@ -171,7 +199,27 @@ namespace YouTubeVideoPlayer
                     autoVote,
                     votes == null ? null : new IVoteDisplay[] { voteSkip!, votes },
                     nowPlaying,
-                    avatars));
+                    avatars,
+                    youtubeBackends is { OffersSignIn: true, YtDlpRunner: { } signInYtDlp }
+                        ? reason => new YouTubeSignInDialog(signInYtDlp.ExecutablePath, reason: reason)
+                        : null);
+
+                // YouTube asked yt-dlp for a sign-in (the bot check): the sign-in window opens by itself, once.
+                var ui = SynchronizationContext.Current!;
+                youtubeBackends.SignInRequested += (_, reason) => ui.Post(_ => form.OfferYouTubeSignIn(reason), null);
+
+                if (ytDlpUpdateNotice != null)
+                {
+                    // Once the window is up (the check never fails: problems are only logged). OK just closes the box.
+                    form.Shown += async (_, _) =>
+                    {
+                        var notice = await ytDlpUpdateNotice;
+                        if (notice != null && !form.IsDisposed)
+                            MessageBox.Show(form, notice, "yt-dlp update available", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    };
+                }
+
+                Application.Run(form);
             }
             finally
             {
